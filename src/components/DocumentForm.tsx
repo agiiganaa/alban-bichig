@@ -10,8 +10,15 @@ import {
   MeetingActionItem,
   PRESET_TEMPLATES,
   PresetTemplate,
+  OrgProfile,
+  AppSettings,
 } from '../types/document';
 import { SignaturePad } from './SignaturePad';
+import {
+  formatRecipientBlock,
+  generateDocNumber,
+  getFormattedMongolianDate,
+} from '../utils/documentUtils';
 import {
   Sparkles,
   BookOpen,
@@ -39,6 +46,14 @@ import {
   X,
   DollarSign,
   FileText,
+  Stamp,
+  Hash,
+  Copy,
+  Scissors,
+  SpellCheck,
+  Maximize2,
+  Check,
+  ChevronDown,
 } from 'lucide-react';
 
 interface DocumentFormProps {
@@ -46,6 +61,9 @@ interface DocumentFormProps {
   onChange: (updated: Partial<DocumentData>) => void;
   onApplyPreset: (preset: PresetTemplate) => void;
   onReset: () => void;
+  orgProfile?: OrgProfile;
+  appSettings?: AppSettings;
+  onGenerateNextNumber?: () => void;
 }
 
 export const DocumentForm: React.FC<DocumentFormProps> = ({
@@ -53,15 +71,23 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
   onChange,
   onApplyPreset,
   onReset,
+  orgProfile,
+  appSettings,
+  onGenerateNextNumber,
 }) => {
   const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuccess, setAiSuccess] = useState<string | null>(null);
   const [selectedTone, setSelectedTone] = useState<AiTone>('standard');
-  const [selectedCategory, setSelectedCategory] = useState<TemplateCategory | 'all'>('all');
   const [previousRoughText, setPreviousRoughText] = useState<string | null>(null);
   const [activeSigTab, setActiveSigTab] = useState<'primary' | 'secondary'>('primary');
   const [showAdvancedToggles, setShowAdvancedToggles] = useState<boolean>(false);
+
+  // Recipient builder state
+  const [recipientOrg, setRecipientOrg] = useState<string>('');
+  const [recipientTitle, setRecipientTitle] = useState<string>('');
+  const [recipientName, setRecipientName] = useState<string>('');
+  const [showRecipientBuilder, setShowRecipientBuilder] = useState<boolean>(false);
 
   // Extract paragraphs array
   const rawText = data.formalizedText || data.roughText || '';
@@ -73,12 +99,13 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           .map((p) => p.trim())
           .filter((p) => p.length > 0);
 
-  const handleFormalizeWithAi = async () => {
-    const textToFormalize =
+  // AI Operations (Formalize, Grammar, Shorten, Expand, Title)
+  const handleAiAction = async (action: 'formalize' | 'grammar' | 'shorten' | 'expand' | 'suggest_title') => {
+    const textToProcess =
       paragraphs.length > 0 ? paragraphs.join('\n\n') : data.roughText;
 
-    if (!textToFormalize.trim()) {
-      setAiError('Шалтгаан, агуулгын хэсэгт ноорог бичвэрээ оруулна уу.');
+    if (!textToProcess.trim() && action !== 'suggest_title') {
+      setAiError('Шалтгаан, агуулгын хэсэгт эх бичвэрээ оруулна уу.');
       return;
     }
 
@@ -97,9 +124,10 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           sender: data.sender || data.signatoryName,
           companyName: data.companyName,
           signatoryTitle: data.signatoryTitle,
-          roughText: textToFormalize,
+          roughText: textToProcess || data.docType,
           duration: data.duration,
           tone: selectedTone,
+          action,
         }),
       });
 
@@ -109,24 +137,39 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
       }
 
       const result = await response.json();
-      setPreviousRoughText(textToFormalize);
+      setPreviousRoughText(textToProcess);
 
-      const newParagraphs = result.formalizedText
-        .split('\n')
-        .map((p: string) => p.trim())
-        .filter((p: string) => p.length > 0);
+      if (action === 'suggest_title' && result.suggestedTitle) {
+        onChange({ title: result.suggestedTitle });
+        setAiSuccess(`Гарчиг санал болгов: "${result.suggestedTitle}"`);
+      } else if (result.formalizedText) {
+        const newParagraphs = result.formalizedText
+          .split('\n')
+          .map((p: string) => p.trim())
+          .filter((p: string) => p.length > 0);
 
-      onChange({
-        formalizedText: result.formalizedText,
-        paragraphsList: newParagraphs,
-      });
+        onChange({
+          formalizedText: result.formalizedText,
+          paragraphsList: newParagraphs,
+        });
 
-      setAiSuccess('Албан хэрэг хөтлөлтийн стандартын дагуу найруулан заслаа!');
+        const successMsg =
+          action === 'grammar'
+            ? 'Зөв бичгийн дүрэм, үг үсгийн алдааг хянаж заслаа!'
+            : action === 'shorten'
+            ? 'Баримтын агуулгыг товчлон богиносголоо!'
+            : action === 'expand'
+            ? 'Агуулга, үндэслэлийг дэлгэрүүлэн баяжууллаа!'
+            : 'Албан хэрэг хөтлөлтийн стандартын дагуу найруулав!';
+
+        setAiSuccess(successMsg);
+      }
+
       setTimeout(() => setAiSuccess(null), 4000);
     } catch (err: any) {
-      console.error('AI Formalization failed:', err);
+      console.error('AI Action failed:', err);
       setAiError(
-        err.message || 'Албан найруулга хийх явцад алдаа гарлаа. Дахин оролдоно уу.'
+        err.message || 'AI боловсруулалт хийх явцад алдаа гарлаа. Дахин оролдоно уу.'
       );
     } finally {
       setIsAiLoading(false);
@@ -145,8 +188,17 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
         paragraphsList: prevParagraphs,
       });
       setPreviousRoughText(null);
-      setAiSuccess('Өмнөх ноорог текстийг сэргээлээ');
+      setAiSuccess('Өмнөх бичвэрийг сэргээлээ');
       setTimeout(() => setAiSuccess(null), 2500);
+    }
+  };
+
+  // Recipient auto-formatter helper
+  const handleApplyRecipientFormat = () => {
+    const formatted = formatRecipientBlock(recipientOrg, recipientTitle, recipientName);
+    if (formatted) {
+      onChange({ recipient: formatted });
+      setShowRecipientBuilder(false);
     }
   };
 
@@ -180,6 +232,27 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
     });
   };
 
+  // Pull organization profile to document
+  const handlePullOrgProfile = () => {
+    if (!orgProfile) return;
+    onChange({
+      companyName: orgProfile.companyName,
+      companyNameEn: orgProfile.companyNameEn,
+      companyRegister: orgProfile.companyRegister,
+      companyAddress: orgProfile.companyAddress,
+      companyPhone: orgProfile.companyPhone,
+      companyEmail: orgProfile.companyEmail,
+      companyWebsite: orgProfile.companyWebsite,
+      companyLogo: orgProfile.companyLogo,
+      signatoryTitle: orgProfile.signatoryTitle,
+      signatoryName: orgProfile.signatoryName,
+      showCompanyHeader: true,
+      officialStamp: true,
+    });
+    setAiSuccess('Байгууллагын профайлыг баримтад татлаа!');
+    setTimeout(() => setAiSuccess(null), 2500);
+  };
+
   // Custom Key-Value fields management
   const handleAddCustomField = () => {
     const current = data.customFields || [];
@@ -210,7 +283,7 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
   const handleAddAttachment = () => {
     const current = data.attachments || [];
     const count = current.length + 1;
-    const newAtt = `${count}. Хавсралт баримт бичгийн нэр (хуудасны тоо)`;
+    const newAtt = `${count}. Хавсралт баримт бичгийн нэр – 1 хуудас`;
     onChange({
       attachments: [...current, newAtt],
       showAttachments: true,
@@ -237,6 +310,21 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
       const result = event.target?.result as string;
       if (result) {
         onChange({ companyLogo: result });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Stamp image upload
+  const handleStampUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (result) {
+        onChange({ stampImage: result, officialStamp: true });
       }
     };
     reader.readAsDataURL(file);
@@ -309,11 +397,6 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
     });
   };
 
-  const quoteTotalSum = (data.quoteItems || []).reduce((sum, item) => {
-    const val = parseFloat((item.totalPrice || '').replace(/,/g, '')) || 0;
-    return sum + val;
-  }, 0);
-
   // Meeting Action Items management
   const handleAddMeetingActionItem = () => {
     const current = data.meetingActionItems || [];
@@ -351,26 +434,12 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
   const isMeetingMinutes = data.docType === 'ХУРЛЫН ТЭМДЭГЛЭЛ';
   const isInternalMemo = data.docType === 'ДОТООД САНАМЖ БИЧИГ';
   const isPaymentGuarantee = data.docType.includes('БАТАЛГАА');
+  const isContract = data.docType.includes('ГЭРЭЭ');
   const isPriceQuote =
     data.docType === 'ҮНИЙН САНАЛ' || Boolean(data.quoteItems && data.quoteItems.length > 0);
 
-  const categories: { key: TemplateCategory | 'all'; label: string; icon: string }[] = [
-    { key: 'all', label: 'Бүгд', icon: '⚡' },
-    { key: 'application', label: 'Өргөдөл, хүсэлт', icon: '📁' },
-    { key: 'corporate_letter', label: 'Албан тоот', icon: '🏢' },
-    { key: 'handover', label: 'Хүлээлцэх акт', icon: '📋' },
-    { key: 'poa', label: 'Итгэмжлэл', icon: '📑' },
-    { key: 'internal', label: 'Дотоод бичиг', icon: '👥' },
-    { key: 'guarantee', label: 'Баталгаа, шаардах', icon: '🛡️' },
-  ];
-
-  const filteredTemplates = PRESET_TEMPLATES.filter((tmpl) => {
-    if (selectedCategory === 'all') return true;
-    return tmpl.category === selectedCategory;
-  });
-
   return (
-    <div className="space-y-6 text-slate-800">
+    <div className="space-y-5 text-slate-800">
       {/* 0. Primary Mode Selector: Personal vs Corporate */}
       <div className="bg-slate-100 p-1.5 rounded-xl border border-slate-200">
         <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1 px-1 flex items-center justify-between">
@@ -381,7 +450,7 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
             className="text-[10px] text-slate-500 hover:text-slate-900 transition-colors inline-flex items-center gap-1 cursor-pointer lowercase"
           >
             <RotateCcw className="w-3 h-3" />
-            <span>Шинээр эхлэх</span>
+            <span>Цэвэрлэх</span>
           </button>
         </div>
         <div className="grid grid-cols-2 gap-1.5">
@@ -409,21 +478,12 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
               onChange({
                 mode: 'corporate',
                 docType: data.docType === 'ӨРГӨДӨЛ' ? 'АЛБАН ТООТ' : data.docType,
-                companyName: data.companyName || '«АРВИН ТЕХНОЛОГИ» ХХК',
-                companyNameEn: data.companyNameEn || 'ARVIN TECHNOLOGY LLC',
-                companyRegister: data.companyRegister || '5412980',
-                companyAddress:
-                  data.companyAddress ||
-                  'Улаанбаатар хот, Сүхбаатар дүүрэг, 1-р хороо, Чингисийн өргөн чөлөө 15/2',
-                companyPhone: data.companyPhone || '7711-0099',
-                companyEmail: data.companyEmail || 'info@arvintech.mn',
-                companyWebsite: data.companyWebsite || 'www.arvintech.mn',
-                documentNumber: data.documentNumber || '26/108',
-                signatoryTitle: data.signatoryTitle || 'Гүйцэтгэх захирал',
-                signatoryName: data.signatoryName || 'Б.Батбаяр',
-                officialStamp: true,
                 showCompanyHeader: true,
+                officialStamp: true,
               });
+              if (orgProfile && !data.companyName) {
+                handlePullOrgProfile();
+              }
             }}
             className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               data.mode === 'corporate'
@@ -432,24 +492,24 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
             }`}
           >
             <Building2 className="w-4 h-4 text-blue-600" />
-            <span>Компани / ААН (Албан тоот)</span>
+            <span>Компани / Албан тоот</span>
           </button>
         </div>
       </div>
 
-      {/* QUICK SECTION TOGGLES (Хэсгүүдийг асаах / унтраах) */}
+      {/* QUICK SECTION TOGGLES */}
       <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs space-y-2">
         <div className="flex items-center justify-between text-xs font-bold text-slate-700">
           <span className="flex items-center gap-1.5">
             <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
-            <span>Баримтын хэсгүүдийг сонгох (Асаах / Унтраах):</span>
+            <span>Баримтын хэсгүүдийг сонгох:</span>
           </span>
           <button
             type="button"
             onClick={() => setShowAdvancedToggles(!showAdvancedToggles)}
             className="text-[11px] text-blue-600 hover:text-blue-800 underline font-normal cursor-pointer"
           >
-            {showAdvancedToggles ? 'Хураах' : 'Дэлгэрэнгүй'}
+            {showAdvancedToggles ? 'Хураах' : 'Бүгдийг харах'}
           </button>
         </div>
 
@@ -565,85 +625,28 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
               onChange={(e) => onChange({ showAttachments: e.target.checked })}
               className="rounded text-blue-600"
             />
-            <span>Хавсралт жагсаалт</span>
+            <span>Хавсралт</span>
           </label>
         </div>
       </div>
 
-      {/* 1. Categorized Presets Library */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-            <BookOpen className="w-4 h-4 text-blue-600" />
-            <span>Бэлэн загварууд:</span>
-          </div>
-          <span className="text-[11px] text-slate-500 font-mono">
-            {filteredTemplates.length} загвар
-          </span>
-        </div>
-
-        {/* Category Tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-none text-[11px]">
-          {categories.map((cat) => (
-            <button
-              key={cat.key}
-              type="button"
-              onClick={() => setSelectedCategory(cat.key)}
-              className={`px-2.5 py-1 rounded-md shrink-0 font-medium transition-all cursor-pointer ${
-                selectedCategory === cat.key
-                  ? 'bg-blue-600 text-white shadow-2xs font-semibold'
-                  : 'bg-white text-slate-600 hover:bg-slate-200/70 border border-slate-200'
-              }`}
-            >
-              <span>{cat.icon} </span>
-              <span>{cat.label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Templates Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
-          {filteredTemplates.map((template) => (
-            <button
-              key={template.id}
-              type="button"
-              onClick={() => onApplyPreset(template)}
-              className="text-left p-2.5 bg-white hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 rounded-lg transition-all group shadow-2xs flex flex-col justify-between cursor-pointer"
-            >
-              <div>
-                <div className="flex items-center justify-between gap-1.5 mb-1">
-                  <span className="font-semibold text-xs text-slate-900 group-hover:text-blue-700">
-                    {template.title}
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.2 rounded font-medium bg-slate-100 text-slate-600 shrink-0">
-                    {template.categoryLabel}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 line-clamp-1">
-                  {template.subtitle}
-                </p>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 2. Corporate Letterhead Settings (If corporate mode) */}
+      {/* 1. Corporate Letterhead Settings (If corporate mode) */}
       {data.mode === 'corporate' && data.showCompanyHeader !== false && (
         <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-xl space-y-3">
           <div className="flex items-center justify-between border-b border-slate-200 pb-2">
             <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
               <Building2 className="w-4 h-4 text-blue-600" />
-              Компанийн толгой & Албан хэвлэмэл хуудасны мэдээлэл
+              Компанийн толгой & Албан хэвлэмэл хуудас
             </span>
-            <button
-              type="button"
-              onClick={() => onChange({ showCompanyHeader: false })}
-              className="text-[10px] text-slate-400 hover:text-rose-600 flex items-center gap-0.5 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-              <span>Хураах</span>
-            </button>
+            {orgProfile && (
+              <button
+                type="button"
+                onClick={handlePullOrgProfile}
+                className="text-[11px] text-blue-600 hover:text-blue-800 font-medium cursor-pointer underline"
+              >
+                Профайлаас татах
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -692,7 +695,7 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[11px] font-semibold text-slate-700">
-                Компанийн нэр (Англи / Дэд гарчиг)
+                Англи нэр
               </label>
               <input
                 type="text"
@@ -704,50 +707,8 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
             </div>
 
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-semibold text-slate-700">
-                  Албан бичгийн дугаар (№)
-                </label>
-                {data.documentNumber && (
-                  <button
-                    type="button"
-                    onClick={() => onChange({ documentNumber: '' })}
-                    className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                  >
-                    ✕ Арилгах
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold text-slate-500">№</span>
-                <input
-                  type="text"
-                  value={data.documentNumber || ''}
-                  onChange={(e) => onChange({ documentNumber: e.target.value })}
-                  placeholder="26/108"
-                  className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-mono"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="space-y-1.5 sm:col-span-2">
               <label className="text-[11px] font-semibold text-slate-700">
-                Албан ёсны хаяг
-              </label>
-              <input
-                type="text"
-                value={data.companyAddress || ''}
-                onChange={(e) => onChange({ companyAddress: e.target.value })}
-                placeholder="Улаанбаатар хот, Сүхбаатар дүүрэг..."
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Байгууллагын РД
+                РД
               </label>
               <input
                 type="text"
@@ -759,49 +720,63 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Утас & И-мэйл
-              </label>
-              <input
-                type="text"
-                value={`${data.companyPhone || ''} ${data.companyEmail ? '· ' + data.companyEmail : ''}`}
-                onChange={(e) => onChange({ companyPhone: e.target.value })}
-                placeholder="Утас: 7711-0099, И-мэйл: info@company.mn"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Вэбсайт
-              </label>
-              <input
-                type="text"
-                value={data.companyWebsite || ''}
-                onChange={(e) => onChange({ companyWebsite: e.target.value })}
-                placeholder="www.company.mn"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-              />
-            </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-semibold text-slate-700">
+              Хаяг & Утас
+            </label>
+            <input
+              type="text"
+              value={data.companyAddress || ''}
+              onChange={(e) => onChange({ companyAddress: e.target.value })}
+              placeholder="Улаанбаатар хот, Сүхбаатар дүүрэг, 1-р хороо..."
+              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
+            />
           </div>
         </div>
       )}
 
-      {/* 3. Document Title, Date, Recipient */}
+      {/* 2. Document Title, Number, Date, Recipient */}
       <div className="space-y-3">
-        <div className="space-y-1.5">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-blue-600" />
-            Баримт бичгийн төрөл / Гарчиг
-          </label>
-          <input
-            type="text"
-            value={data.docType}
-            onChange={(e) => onChange({ docType: e.target.value as DocumentType })}
-            className="w-full text-xs font-bold px-3 py-2 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500"
-          />
+        {/* Document Type & Auto Numbering */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+          <div className="sm:col-span-7 space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-blue-600" />
+              Баримт бичгийн төрөл / Гарчиг
+            </label>
+            <input
+              type="text"
+              value={data.docType}
+              onChange={(e) => onChange({ docType: e.target.value as DocumentType })}
+              className="w-full text-xs font-bold px-3 py-2 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="sm:col-span-5 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                <Hash className="w-3.5 h-3.5 text-blue-600" />
+                Албан бичгийн №
+              </label>
+              {onGenerateNextNumber && (
+                <button
+                  type="button"
+                  onClick={onGenerateNextNumber}
+                  className="text-[10px] text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+                  title="Дараагийн дугаарыг тооцоолох"
+                >
+                  + Дугаар авах
+                </button>
+              )}
+            </div>
+            <input
+              type="text"
+              value={data.documentNumber || ''}
+              onChange={(e) => onChange({ documentNumber: e.target.value })}
+              placeholder="26/108"
+              className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-md font-mono font-bold"
+            />
+          </div>
         </div>
 
         {/* Date & Location */}
@@ -812,32 +787,24 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
                 <label className="text-xs font-semibold text-slate-600">Огноо</label>
                 <button
                   type="button"
-                  onClick={() => onChange({ date: '' })}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
+                  onClick={() => onChange({ date: getFormattedMongolianDate() })}
+                  className="text-[10px] text-blue-600 hover:underline cursor-pointer"
                 >
-                  ✕ Арилгах
+                  Өнөөдөр
                 </button>
               </div>
               <input
                 type="text"
                 value={data.date}
                 onChange={(e) => onChange({ date: e.target.value })}
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500"
+                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 font-mono"
               />
             </div>
+
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-slate-600">
-                  Байршил / Хот
-                </label>
-                <button
-                  type="button"
-                  onClick={() => onChange({ city: '' })}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                >
-                  ✕ Арилгах
-                </button>
-              </div>
+              <label className="text-xs font-semibold text-slate-600">
+                Байршил / Хот
+              </label>
               <input
                 type="text"
                 value={data.city}
@@ -848,1083 +815,574 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           </div>
         )}
 
-        {/* Recipient */}
+        {/* Recipient Block with Auto-formatter */}
         {data.showRecipient !== false && (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
                 <Building className="w-3.5 h-3.5 text-blue-600" />
-                Хэнд (Хүлээн авагч байгууллага, албан тушаалтан)
+                Хүлээн авагч (Хэнд)
               </label>
-              {data.recipient && (
-                <button
-                  type="button"
-                  onClick={() => onChange({ recipient: '' })}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                >
-                  ✕ Арилгах
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowRecipientBuilder(!showRecipientBuilder)}
+                className="text-[11px] text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+              >
+                {showRecipientBuilder ? 'Хураах' : 'Формат туслах ▾'}
+              </button>
             </div>
-            <input
-              type="text"
+
+            {/* Recipient Builder popup helper */}
+            {showRecipientBuilder && (
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-lg space-y-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-600 block">Байгууллага</label>
+                    <input
+                      type="text"
+                      value={recipientOrg}
+                      onChange={(e) => setRecipientOrg(e.target.value)}
+                      placeholder='«Түшиг» ХХК'
+                      className="w-full text-xs px-2 py-1 bg-white border border-blue-200 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-600 block">Албан тушаал</label>
+                    <input
+                      type="text"
+                      value={recipientTitle}
+                      onChange={(e) => setRecipientTitle(e.target.value)}
+                      placeholder="Гүйцэтгэх захирал"
+                      className="w-full text-xs px-2 py-1 bg-white border border-blue-200 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-600 block">Нэр</label>
+                    <input
+                      type="text"
+                      value={recipientName}
+                      onChange={(e) => setRecipientName(e.target.value)}
+                      placeholder="Д.Бат-Эрдэнэ"
+                      className="w-full text-xs px-2 py-1 bg-white border border-blue-200 rounded"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={handleApplyRecipientFormat}
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold cursor-pointer shadow-2xs"
+                  >
+                    Формат хийж оруулах
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <textarea
+              rows={3}
               value={data.recipient}
               onChange={(e) => onChange({ recipient: e.target.value })}
-              placeholder='ж.нь: "Гүйцэтгэх захирал танаа", "«Хаан Банк» танаа"'
-              className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500"
+              placeholder='«Монгол Шуудан» ХК-ийн&#10;Мэдээллийн технологийн газрын захирал&#10;Ц.Мөнхбат танаа'
+              className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 font-medium leading-relaxed"
             />
           </div>
         )}
-
-        {/* Duration / Validity */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-blue-600" />
-              Хугацаа (Чөлөөний хугацаа / Гэрээний хугацаа / Хүчинтэй хугацаа)
-            </label>
-            {data.duration && (
-              <button
-                type="button"
-                onClick={() => onChange({ duration: '' })}
-                className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-              >
-                ✕ Арилгах
-              </button>
-            )}
-          </div>
-          <input
-            type="text"
-            value={data.duration || ''}
-            onChange={(e) => onChange({ duration: e.target.value })}
-            placeholder="ж.нь: 2026.10.01 - 2026.10.03 (3 хоног) эсвэл 1 жилийн хугацаатай"
-            className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
       </div>
 
-      {/* ================= SPECIALIZED 1: ХҮЛЭЭЛЦЭХ АКТ (HANDOVER ACT) ================= */}
-      {isActDoc && (
-        <div className="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
-            <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-              <FileCheck2 className="w-4 h-4 text-emerald-600" />
-              Хүлээлцэх эд хөрөнгө, ажлын жагсаалт (Акт хүснэгт)
+      {/* 3. AI DOCUMENT ASSISTANT TOOLBAR */}
+      <div className="p-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 border border-blue-200 rounded-2xl shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-blue-600 text-white flex items-center justify-center">
+              <Sparkles className="w-3.5 h-3.5" />
+            </div>
+            <span className="text-xs font-bold text-slate-900">
+              AI Баримт бичгийн туслах
             </span>
-            <button
-              type="button"
-              onClick={handleAddActItem}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Мөр нэмэх</span>
-            </button>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-slate-700">
-              Хүлээлцсэн байршил / Тасаг, өрөө
-            </label>
-            <input
-              type="text"
-              value={data.handoverLocation || ''}
-              onChange={(e) => onChange({ handoverLocation: e.target.value })}
-              placeholder="ж.нь: Төв байр, 404 тоот өрөө"
-              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-            />
-          </div>
-
-          <div className="space-y-2">
-            {data.actItems && data.actItems.length > 0 ? (
-              data.actItems.map((item, index) => (
-                <div
-                  key={item.id}
-                  className="p-3 bg-white rounded-lg border border-emerald-200 shadow-2xs space-y-2 relative group"
-                >
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                    <span className="font-mono bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
-                      № {index + 1}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveActItem(item.id)}
-                      className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded cursor-pointer transition-colors flex items-center gap-1 text-[11px]"
-                      title="Энэ мөрийг устгах"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-red-600" />
-                      <span className="text-red-600 font-medium">Мөр устгах</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                    <div className="sm:col-span-6">
-                      <input
-                        type="text"
-                        value={item.name}
-                        onChange={(e) =>
-                          handleUpdateActItem(item.id, { name: e.target.value })
-                        }
-                        placeholder="Эд хөрөнгийн нэр..."
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded font-medium"
-                      />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <input
-                        type="text"
-                        value={item.quantity}
-                        onChange={(e) =>
-                          handleUpdateActItem(item.id, { quantity: e.target.value })
-                        }
-                        placeholder="Тоо (1 ш)"
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded text-center"
-                      />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <input
-                        type="text"
-                        value={item.condition}
-                        onChange={(e) =>
-                          handleUpdateActItem(item.id, { condition: e.target.value })
-                        }
-                        placeholder="Төлөв (Хэвийн)"
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <input
-                      type="text"
-                      value={item.notes}
-                      onChange={(e) =>
-                        handleUpdateActItem(item.id, { notes: e.target.value })
-                      }
-                      placeholder="Нэмэлт тэмдэглэл, дагалдах зүйлс..."
-                      className="w-full text-[11px] px-2.5 py-1 border border-slate-200 rounded text-slate-600 bg-slate-50/50"
-                    />
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-4 bg-white rounded border border-dashed border-emerald-300 text-xs text-slate-500">
-                Одоогоор хүснэгтэд мөр байхгүй байна.{' '}
-                <button
-                  type="button"
-                  onClick={handleAddActItem}
-                  className="text-emerald-700 underline font-medium cursor-pointer"
-                >
-                  Мөр нэмэх
-                </button>
-              </div>
-            )}
-          </div>
+          {/* Tone Selector */}
+          <select
+            value={selectedTone}
+            onChange={(e) => setSelectedTone(e.target.value as AiTone)}
+            className="text-[11px] bg-white border border-blue-200 rounded px-2 py-1 text-slate-700 font-medium"
+          >
+            <option value="standard">Стандарт албан бичиг</option>
+            <option value="government">Төрийн байгууллагад (Хатуу)</option>
+            <option value="b2b">Түнш байгууллагад (B2B соёлтой)</option>
+            <option value="respectful">Хүндэтгэлтэй (Дипломат)</option>
+          </select>
         </div>
-      )}
 
-      {/* ================= SPECIALIZED 1.5: ҮНИЙН САНАЛ (PRICE QUOTATION) ================= */}
-      {isPriceQuote && (
-        <div className="p-4 bg-blue-50/50 border border-blue-200 rounded-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-blue-200 pb-2">
-            <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-blue-600" />
-              Үнийн саналын хүснэгт & Бараа үйлчилгээний задаргаа
-            </span>
-            <button
-              type="button"
-              onClick={handleAddQuoteItem}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Мөр нэмэх</span>
-            </button>
-          </div>
+        {/* Action Buttons */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          <button
+            type="button"
+            disabled={isAiLoading}
+            onClick={() => handleAiAction('formalize')}
+            className="p-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>Найруулга засах</span>
+          </button>
 
-          <div className="space-y-2">
-            {data.quoteItems && data.quoteItems.length > 0 ? (
-              data.quoteItems.map((item, index) => (
-                <div
-                  key={item.id}
-                  className="p-3 bg-white rounded-lg border border-blue-200 shadow-2xs space-y-2 relative group"
-                >
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                    <span className="font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">
-                      № {index + 1}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveQuoteItem(item.id)}
-                      className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded cursor-pointer transition-colors flex items-center gap-1 text-[11px]"
-                      title="Энэ мөрийг устгах"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-red-600" />
-                      <span className="text-red-600 font-medium">Мөр устгах</span>
-                    </button>
-                  </div>
+          <button
+            type="button"
+            disabled={isAiLoading}
+            onClick={() => handleAiAction('grammar')}
+            className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+          >
+            <SpellCheck className="w-3.5 h-3.5 text-blue-600" />
+            <span>Алдаа засах</span>
+          </button>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                    <div className="sm:col-span-5">
-                      <label className="text-[10px] text-slate-500 block mb-0.5">
-                        Бараа, ажил үйлчилгээний нэр
-                      </label>
-                      <input
-                        type="text"
-                        value={item.name}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { name: e.target.value })
-                        }
-                        placeholder="Сервер, лиценз, суурилуулалт..."
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded font-medium"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="text-[10px] text-slate-500 block mb-0.5">
-                        Хэмжих нэгж
-                      </label>
-                      <input
-                        type="text"
-                        value={item.unit}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { unit: e.target.value })
-                        }
-                        placeholder="ш, багц, сар..."
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded text-center"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="text-[10px] text-slate-500 block mb-0.5">
-                        Тоо ширхэг
-                      </label>
-                      <input
-                        type="text"
-                        value={item.quantity}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { quantity: e.target.value })
-                        }
-                        placeholder="1"
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded text-center font-mono"
-                      />
-                    </div>
-                    <div className="sm:col-span-3">
-                      <label className="text-[10px] text-slate-500 block mb-0.5">
-                        Нэгж үнэ (₮)
-                      </label>
-                      <input
-                        type="text"
-                        value={item.unitPrice}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { unitPrice: e.target.value })
-                        }
-                        placeholder="2,500,000"
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded text-right font-mono"
-                      />
-                    </div>
-                  </div>
+          <button
+            type="button"
+            disabled={isAiLoading}
+            onClick={() => handleAiAction('shorten')}
+            className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+          >
+            <Scissors className="w-3.5 h-3.5 text-blue-600" />
+            <span>Богиносгох</span>
+          </button>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center pt-1 border-t border-slate-100">
-                    <div className="sm:col-span-7">
-                      <input
-                        type="text"
-                        value={item.notes || ''}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { notes: e.target.value })
-                        }
-                        placeholder="Нэмэлт тайлбар, үзүүлэлт..."
-                        className="w-full text-[11px] px-2.5 py-1 border border-slate-200 rounded text-slate-600 bg-slate-50/50"
-                      />
-                    </div>
-                    <div className="sm:col-span-5 flex items-center justify-end gap-1.5 text-xs">
-                      <span className="text-slate-500 text-[11px]">Нийт үнэ:</span>
-                      <input
-                        type="text"
-                        value={item.totalPrice}
-                        onChange={(e) =>
-                          handleUpdateQuoteItem(item.id, { totalPrice: e.target.value })
-                        }
-                        placeholder="0"
-                        className="w-36 text-xs px-2 py-1 border border-blue-300 rounded text-right font-bold font-mono text-blue-900 bg-blue-50/40"
-                      />
-                      <span className="text-slate-600 font-mono">₮</span>
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-4 bg-white rounded border border-dashed border-blue-300 text-xs text-slate-500">
-                Одоогоор хүснэгтэд мөр байхгүй байна.{' '}
-                <button
-                  type="button"
-                  onClick={handleAddQuoteItem}
-                  className="text-blue-700 underline font-medium cursor-pointer"
-                >
-                  Мөр нэмэх
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Quote Total Summary Bar */}
-          {data.quoteItems && data.quoteItems.length > 0 && (
-            <div className="flex items-center justify-between p-3 bg-blue-100/70 border border-blue-200 rounded-lg text-xs">
-              <span className="font-bold text-blue-950">
-                Нийт үнийн дүн ({data.quoteItems.length} бараа/үйлчилгээ):
-              </span>
-              <span className="font-mono font-bold text-base text-blue-900">
-                {quoteTotalSum.toLocaleString('en-US')} ₮
-              </span>
-            </div>
-          )}
+          <button
+            type="button"
+            disabled={isAiLoading}
+            onClick={() => handleAiAction('expand')}
+            className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-blue-600" />
+            <span>Дэлгэрүүлэх</span>
+          </button>
         </div>
-      )}
 
-      {/* ================= SPECIALIZED 2: ИТГЭМЖЛЭЛ (POWER OF ATTORNEY) ================= */}
-      {isPoaDoc && (
-        <div className="p-4 bg-indigo-50/50 border border-indigo-200 rounded-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-indigo-200 pb-2">
-            <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-indigo-600" />
-              Итгэмжлэлийн талууд
+        {/* Status / Errors / Revert */}
+        {aiError && (
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{aiError}</span>
+          </div>
+        )}
+
+        {aiSuccess && (
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center justify-between">
+            <span className="flex items-center gap-1.5 font-medium">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{aiSuccess}</span>
             </span>
-            <span className="text-[10px] text-indigo-700 font-semibold bg-indigo-100 px-2 py-0.5 rounded">
-              Иргэний хууль
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2 space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Итгэмжлэгч (Эрх олгогч)
-              </label>
-              <input
-                type="text"
-                value={data.grantorName || data.sender || ''}
-                onChange={(e) => {
-                  onChange({ grantorName: e.target.value, sender: e.target.value });
-                }}
-                placeholder="Баатар овогтой Ганзориг"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-medium"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Итгэмжлэгчийн РД
-              </label>
-              <input
-                type="text"
-                value={data.grantorRegister || data.senderRegister || ''}
-                onChange={(e) => {
-                  onChange({
-                    grantorRegister: e.target.value,
-                    senderRegister: e.target.value,
-                  });
-                }}
-                placeholder="УШ85101519"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-mono"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2 space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Итгэмжлэгдэгч (Төлөөлөгч)
-              </label>
-              <input
-                type="text"
-                value={data.attorneyName || data.secondSignatoryName || ''}
-                onChange={(e) => {
-                  onChange({
-                    attorneyName: e.target.value,
-                    secondSignatoryName: e.target.value,
-                  });
-                }}
-                placeholder="Төмөр овогтой Төгөлдөр"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-medium"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Итгэмжлэгдэгчийн РД
-              </label>
-              <input
-                type="text"
-                value={data.attorneyRegister || data.secondSignatoryRegister || ''}
-                onChange={(e) => {
-                  onChange({
-                    attorneyRegister: e.target.value,
-                    secondSignatoryRegister: e.target.value,
-                  });
-                }}
-                placeholder="ЧД92080412"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-mono"
-              />
-            </div>
-          </div>
-
-          {isVehiclePoa && (
-            <div className="p-3 bg-white rounded-lg border border-indigo-200 space-y-2">
-              <div className="text-xs font-semibold text-indigo-900 flex items-center gap-1.5">
-                <Car className="w-3.5 h-3.5 text-indigo-600" />
-                Тээврийн хэрэгслийн үзүүлэлт:
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <input
-                  type="text"
-                  value={data.vehiclePlate || ''}
-                  onChange={(e) => onChange({ vehiclePlate: e.target.value })}
-                  placeholder="Улсын дугаар (12-34 УБҮ)"
-                  className="text-xs px-2.5 py-1.5 border border-slate-300 rounded font-mono font-bold"
-                />
-                <input
-                  type="text"
-                  value={data.vehicleModel || ''}
-                  onChange={(e) => onChange({ vehicleModel: e.target.value })}
-                  placeholder="Марк (Toyota Prado)"
-                  className="text-xs px-2.5 py-1.5 border border-slate-300 rounded"
-                />
-                <input
-                  type="text"
-                  value={data.vehicleVin || ''}
-                  onChange={(e) => onChange({ vehicleVin: e.target.value })}
-                  placeholder="Арлын дугаар (VIN)"
-                  className="text-xs px-2.5 py-1.5 border border-slate-300 rounded font-mono"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ================= SPECIALIZED 3: ХУРЛЫН ТЭМДЭГЛЭЛ ================= */}
-      {isMeetingMinutes && (
-        <div className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl space-y-4">
-          <div className="flex items-center justify-between border-b border-amber-200 pb-2">
-            <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-amber-600" />
-              Хурлын явц, ирц ба гарсан шийдвэрүүд
-            </span>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-slate-700">
-              Хурлын сэдэв / Нэр
-            </label>
-            <input
-              type="text"
-              value={data.meetingTitle || ''}
-              onChange={(e) => onChange({ meetingTitle: e.target.value })}
-              placeholder="ж.нь: Удирдах зөвлөлийн төсөв батлах хурал"
-              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-semibold"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Хурал даргалагч
-              </label>
-              <input
-                type="text"
-                value={data.meetingChairperson || data.signatoryName || ''}
-                onChange={(e) => {
-                  onChange({
-                    meetingChairperson: e.target.value,
-                    signatoryName: e.target.value,
-                  });
-                }}
-                placeholder="Гүйцэтгэх захирал Б.Батбаяр"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Тэмдэглэл хөтөлсөн (Нарийн бичиг)
-              </label>
-              <input
-                type="text"
-                value={data.meetingSecretary || data.secondSignatoryName || ''}
-                onChange={(e) => {
-                  onChange({
-                    meetingSecretary: e.target.value,
-                    secondSignatoryName: e.target.value,
-                  });
-                }}
-                placeholder="Туслах Э.Ундрах"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold text-slate-700">
-              Оролцсон гишүүд (Ирц)
-            </label>
-            <input
-              type="text"
-              value={data.meetingAttendees || ''}
-              onChange={(e) => onChange({ meetingAttendees: e.target.value })}
-              placeholder="Нийт гишүүд 100% ирцтэй"
-              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md"
-            />
-          </div>
-
-          {/* Action items table */}
-          <div className="space-y-2 pt-1">
-            <div className="flex items-center justify-between text-xs font-semibold text-amber-900">
-              <span className="flex items-center gap-1">
-                <ListTodo className="w-3.5 h-3.5 text-amber-600" />
-                Биелүүлэх үүрэг даалгаврын хуваарь:
-              </span>
+            {previousRoughText && (
               <button
                 type="button"
-                onClick={handleAddMeetingActionItem}
-                className="text-[11px] text-amber-700 hover:text-amber-900 underline font-medium cursor-pointer"
+                onClick={handleRevertText}
+                className="text-[11px] text-slate-600 hover:text-slate-900 underline cursor-pointer"
               >
-                + Даалгавар нэмэх
+                Буцаах
               </button>
-            </div>
-
-            {data.meetingActionItems && data.meetingActionItems.length > 0 ? (
-              data.meetingActionItems.map((act, index) => (
-                <div
-                  key={act.id}
-                  className="grid grid-cols-1 sm:grid-cols-12 gap-1.5 bg-white p-2 rounded border border-amber-200 text-xs items-center"
-                >
-                  <div className="sm:col-span-1 text-center font-mono font-bold text-amber-800">
-                    {index + 1}
-                  </div>
-                  <div className="sm:col-span-5">
-                    <input
-                      type="text"
-                      value={act.task}
-                      onChange={(e) =>
-                        handleUpdateMeetingActionItem(act.id, { task: e.target.value })
-                      }
-                      placeholder="Үүрэг даалгавар..."
-                      className="w-full text-xs px-2 py-1 border border-slate-300 rounded"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <input
-                      type="text"
-                      value={act.assignee}
-                      onChange={(e) =>
-                        handleUpdateMeetingActionItem(act.id, { assignee: e.target.value })
-                      }
-                      placeholder="Хариуцагч..."
-                      className="w-full text-xs px-2 py-1 border border-slate-300 rounded"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <input
-                      type="text"
-                      value={act.deadline}
-                      onChange={(e) =>
-                        handleUpdateMeetingActionItem(act.id, { deadline: e.target.value })
-                      }
-                      placeholder="Хугацаа..."
-                      className="w-full text-xs px-2 py-1 border border-slate-300 rounded font-mono"
-                    />
-                  </div>
-                  <div className="sm:col-span-1 text-center">
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveMeetingActionItem(act.id)}
-                      className="text-red-500 hover:text-red-700 p-1 cursor-pointer"
-                      title="Устгах"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-3 bg-white rounded border border-dashed border-amber-200 text-xs text-slate-400">
-                Үүрэг даалгаврын хуваарь оруулаагүй байна.{' '}
-                <button
-                  type="button"
-                  onClick={handleAddMeetingActionItem}
-                  className="text-amber-700 underline font-medium cursor-pointer"
-                >
-                  Даалгавар нэмэх
-                </button>
-              </div>
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* ================= SPECIALIZED 4: ДОТООД САНАМЖ БИЧИГ (MEMO) ================= */}
-      {isInternalMemo && (
-        <div className="p-4 bg-slate-50 border border-slate-300 rounded-xl space-y-3">
-          <div className="text-xs font-bold text-slate-800 border-b border-slate-200 pb-1.5 flex items-center gap-1.5">
-            <FileText className="w-3.5 h-3.5 text-blue-600" />
-            Дотоод санамж бичгийн тохиргоо
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold text-slate-700">
-              Сэдэв / Гарчиг
-            </label>
-            <input
-              type="text"
-              value={data.memoSubject || ''}
-              onChange={(e) => onChange({ memoSubject: e.target.value })}
-              placeholder="ж.нь: Ажлын цагийн горим болон мэдээллийн аюулгүй байдлын тухай"
-              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-md font-semibold"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ================= SPECIALIZED 5: ТӨЛБӨР ТӨЛӨХ БАТАЛГАА ================= */}
-      {isPaymentGuarantee && (
-        <div className="p-4 bg-teal-50/50 border border-teal-200 rounded-xl space-y-3">
-          <div className="text-xs font-bold text-teal-900 border-b border-teal-200 pb-1.5 flex items-center justify-between">
-            <span>Төлбөрийн баталгааны үзүүлэлт</span>
-            <span className="text-[10px] text-teal-700 font-semibold bg-teal-100 px-2 py-0.5 rounded">
-              Хууль зүйн баталгаа
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Төлбөрийн дүн (Тоогоор, төгрөг)
-              </label>
-              <input
-                type="text"
-                value={data.paymentAmountNumber || ''}
-                onChange={(e) => onChange({ paymentAmountNumber: e.target.value })}
-                placeholder="85,000,000"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded font-mono font-bold"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700">
-                Төлбөрийн дүн (Үсгээр)
-              </label>
-              <input
-                type="text"
-                value={data.paymentAmountWords || ''}
-                onChange={(e) => onChange({ paymentAmountWords: e.target.value })}
-                placeholder="наян таван сая төгрөг"
-                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold text-slate-700">
-              Төлж барагдуулах эцсийн хугацаа
-            </label>
-            <input
-              type="text"
-              value={data.paymentDueDate || data.duration || ''}
-              onChange={(e) => {
-                onChange({
-                  paymentDueDate: e.target.value,
-                  duration: e.target.value,
-                });
-              }}
-              placeholder="2026 оны 10 дугаар сарын 25-ны өдрийн дотор"
-              className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* 4. DYNAMIC PARAGRAPHS & CLAUSES (+ Шинэ заалт нэмэх, хасах) & AI Assistant */}
+      {/* 4. DYNAMIC PARAGRAPHS & CLAUSES (Word-like clause builder) */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center justify-between">
           <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <span>Их биеийн заалтууд & Догол мөрүүд ({paragraphs.length}):</span>
+            <FileText className="w-3.5 h-3.5 text-blue-600" />
+            Их бие бичвэр & Догол мөрүүд ({paragraphs.length})
           </label>
-
-          {/* AI Tone Selector */}
-          <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[11px]">
-            <span className="text-slate-500 px-1.5 hidden sm:inline">Өнгө аяс:</span>
-            <button
-              type="button"
-              onClick={() => setSelectedTone('government')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                selectedTone === 'government'
-                  ? 'bg-white text-blue-700 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Төрийн алба
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedTone('b2b')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                selectedTone === 'b2b'
-                  ? 'bg-white text-blue-700 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              B2B Түншлэл
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedTone('respectful')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                selectedTone === 'respectful'
-                  ? 'bg-white text-blue-700 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Хүндэтгэлтэй
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleAddParagraph}
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>+ Догол мөр нэмэх</span>
+          </button>
         </div>
 
-        {/* Dynamic Clauses List with individual edit & trash icons */}
         <div className="space-y-2.5">
-          {paragraphs.map((p, idx) => (
+          {paragraphs.map((para, idx) => (
             <div
               key={idx}
-              className="p-2.5 bg-white border border-slate-300 rounded-lg shadow-2xs space-y-1.5 group/clause hover:border-blue-400 transition-colors"
+              className="p-3 bg-white border border-slate-300 rounded-xl shadow-2xs space-y-1.5 relative group"
             >
-              <div className="flex items-center justify-between text-[11px] text-slate-500">
-                <span className="font-semibold text-slate-700">
-                  {idx === 0 ? '§1. Эхлэл / Үндэслэл' : `§${idx + 1}. Заалт / Догол мөр`}
+              <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                <span className="bg-slate-100 px-2 py-0.5 rounded font-bold text-slate-700">
+                  § {idx + 1}-р догол мөр
                 </span>
                 {paragraphs.length > 1 && (
                   <button
                     type="button"
                     onClick={() => handleRemoveParagraph(idx)}
-                    className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 cursor-pointer transition-colors"
-                    title="Энэ заалтыг хасах"
+                    className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 cursor-pointer flex items-center gap-1 text-[11px]"
+                    title="Догол мөр устгах"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
+                    <span>Устгах</span>
                   </button>
                 )}
               </div>
 
               <textarea
                 rows={3}
-                value={p}
+                value={para}
                 onChange={(e) => handleUpdateParagraph(idx, e.target.value)}
-                placeholder="Заалтын бичвэрийг оруулна уу..."
-                className="w-full text-xs p-2 bg-slate-50/50 border border-slate-200 rounded focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-500 font-sans leading-relaxed text-slate-900"
+                placeholder="Догол мөрийн агуулгыг энд бичнэ үү..."
+                className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 leading-relaxed text-justify"
               />
             </div>
           ))}
         </div>
-
-        {/* Add Paragraph & AI Formalize Actions */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <button
-            type="button"
-            onClick={handleAddParagraph}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-semibold transition-colors cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Шинэ заалт / догол мөр нэмэх</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleFormalizeWithAi}
-            disabled={isAiLoading || paragraphs.length === 0}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-md font-semibold text-xs text-white transition-all shadow-xs cursor-pointer ${
-              isAiLoading
-                ? 'bg-slate-400 cursor-not-allowed opacity-75'
-                : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
-            }`}
-          >
-            {isAiLoading ? (
-              <>
-                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                <span>Албан найруулгад шилжүүлж байна...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>✨ Албан найруулгаар засах</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Revert link */}
-        {previousRoughText && (
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={handleRevertText}
-              className="text-xs text-slate-500 hover:text-slate-800 underline decoration-slate-300 cursor-pointer"
-            >
-              Анхны ноорог эхийг буцаах
-            </button>
-          </div>
-        )}
-
-        {/* Status Messages */}
-        {aiSuccess && (
-          <div className="p-2.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>{aiSuccess}</span>
-          </div>
-        )}
-
-        {aiError && (
-          <div className="p-2.5 rounded bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{aiError}</span>
-          </div>
-        )}
       </div>
 
-      {/* ================= 5. CUSTOM FIELDS & ATTACHMENTS (НЭМЭХ / ХАСАХ) ================= */}
-      <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-        <div className="flex items-center justify-between text-xs font-bold text-slate-800">
-          <span>Нэмэлт мэдээлэл & Хавсралтын жагсаалт:</span>
-          <div className="flex items-center gap-2">
+      {/* 5. SPECIALIZED SECTIONS (Акт, Үнийн санал, Гэрээ, Итгэмжлэл, Хурлын тэмдэглэл) */}
+      {/* Handover Act Table */}
+      {isActDoc && (
+        <div className="p-4 bg-emerald-50/50 border border-emerald-200 rounded-xl space-y-3">
+          <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
+            <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+              <FileCheck2 className="w-4 h-4 text-emerald-600" />
+              Хүлээлцэх эд хөрөнгийн хүснэгт
+            </span>
             <button
               type="button"
-              onClick={handleAddCustomField}
-              className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold cursor-pointer underline"
+              onClick={handleAddActItem}
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold cursor-pointer shadow-2xs"
             >
-              + Нэмэлт мэдээлэл нэмэх
-            </button>
-            <span className="text-slate-300">|</span>
-            <button
-              type="button"
-              onClick={handleAddAttachment}
-              className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold cursor-pointer underline"
-            >
-              + Хавсралт нэмэх
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Мөр нэмэх</span>
             </button>
           </div>
-        </div>
 
-        {/* Custom Key-Value fields list */}
-        {data.customFields && data.customFields.length > 0 && (
-          <div className="space-y-1.5 pt-1">
-            <div className="text-[11px] font-semibold text-slate-600">
-              Нэмэлт мэдээллийн талбарууд:
-            </div>
-            {data.customFields.map((field) => (
-              <div key={field.id} className="flex items-center gap-2 bg-white p-2 rounded border border-slate-300">
-                <input
-                  type="text"
-                  value={field.label}
-                  onChange={(e) =>
-                    handleUpdateCustomField(field.id, { label: e.target.value })
-                  }
-                  placeholder="Талбарын нэр"
-                  className="w-1/3 text-xs px-2 py-1 border border-slate-200 rounded font-semibold text-slate-800"
-                />
-                <input
-                  type="text"
-                  value={field.value}
-                  onChange={(e) =>
-                    handleUpdateCustomField(field.id, { value: e.target.value })
-                  }
-                  placeholder="Утга / Мэдээлэл"
-                  className="flex-1 text-xs px-2 py-1 border border-slate-200 rounded text-slate-800"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleRemoveCustomField(field.id)}
-                  className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 cursor-pointer"
-                  title="Талбар хасах"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+          <div className="space-y-2">
+            {(data.actItems || []).map((item, index) => (
+              <div
+                key={item.id}
+                className="p-3 bg-white rounded-lg border border-emerald-200 space-y-2 shadow-2xs"
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-mono bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">
+                    № {index + 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveActItem(item.id)}
+                    className="text-rose-600 hover:underline flex items-center gap-1 text-[11px] cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Устгах</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    value={item.name}
+                    onChange={(e) =>
+                      handleUpdateActItem(item.id, { name: e.target.value })
+                    }
+                    placeholder="Эд хөрөнгийн нэр..."
+                    className="text-xs px-2.5 py-1.5 border border-slate-300 rounded font-medium"
+                  />
+                  <input
+                    type="text"
+                    value={item.quantity}
+                    onChange={(e) =>
+                      handleUpdateActItem(item.id, { quantity: e.target.value })
+                    }
+                    placeholder="Тоо ширхэг (1 ш)"
+                    className="text-xs px-2.5 py-1.5 border border-slate-300 rounded text-center"
+                  />
+                  <input
+                    type="text"
+                    value={item.condition}
+                    onChange={(e) =>
+                      handleUpdateActItem(item.id, { condition: e.target.value })
+                    }
+                    placeholder="Төлөв (Бүрэн бүтэн)"
+                    className="text-xs px-2.5 py-1.5 border border-slate-300 rounded"
+                  />
+                </div>
               </div>
             ))}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Attachments List */}
-        {data.attachments && data.attachments.length > 0 && (
-          <div className="space-y-1.5 pt-1 border-t border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-600 flex items-center gap-1">
-              <Paperclip className="w-3 h-3 text-slate-500" />
-              Хавсралт баримт бичгүүд:
-            </div>
-            {data.attachments.map((att, i) => (
-              <div key={i} className="flex items-center gap-2 bg-white p-2 rounded border border-slate-300">
-                <input
-                  type="text"
-                  value={att}
-                  onChange={(e) => handleUpdateAttachment(i, e.target.value)}
-                  placeholder="Хавсралт баримтын нэр..."
-                  className="flex-1 text-xs px-2 py-1 border border-slate-200 rounded text-slate-800"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleRemoveAttachment(i)}
-                  className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-rose-50 cursor-pointer"
-                  title="Хавсралт хасах"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+      {/* Price Quote Table */}
+      {isPriceQuote && (
+        <div className="p-4 bg-blue-50/50 border border-blue-200 rounded-xl space-y-3">
+          <div className="flex items-center justify-between border-b border-blue-200 pb-2">
+            <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+              <DollarSign className="w-4 h-4 text-blue-600" />
+              Үнийн саналын задаргаа (Хүснэгт)
+            </span>
+            <button
+              type="button"
+              onClick={handleAddQuoteItem}
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold cursor-pointer shadow-2xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Мөр нэмэх</span>
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            {(data.quoteItems || []).map((item, index) => (
+              <div
+                key={item.id}
+                className="p-3 bg-white rounded-lg border border-blue-200 space-y-2 shadow-2xs"
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-mono bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-bold">
+                    № {index + 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveQuoteItem(item.id)}
+                    className="text-rose-600 hover:underline flex items-center gap-1 text-[11px] cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Устгах</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <input
+                    type="text"
+                    value={item.name}
+                    onChange={(e) =>
+                      handleUpdateQuoteItem(item.id, { name: e.target.value })
+                    }
+                    placeholder="Бараа, үйлчилгээний нэр..."
+                    className="text-xs px-2 py-1.5 border border-slate-300 rounded font-medium sm:col-span-2"
+                  />
+                  <input
+                    type="text"
+                    value={item.quantity}
+                    onChange={(e) =>
+                      handleUpdateQuoteItem(item.id, { quantity: e.target.value })
+                    }
+                    placeholder="Тоо"
+                    className="text-xs px-2 py-1.5 border border-slate-300 rounded text-center font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={item.unitPrice}
+                    onChange={(e) =>
+                      handleUpdateQuoteItem(item.id, { unitPrice: e.target.value })
+                    }
+                    placeholder="Нэгж үнэ (₮)"
+                    className="text-xs px-2 py-1.5 border border-slate-300 rounded text-right font-mono"
+                  />
+                </div>
               </div>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* 6. Dual Signatures / Submitter Section */}
-      <div className="pt-2 border-t border-slate-200 space-y-3">
+      {/* Vehicle Info */}
+      {isVehiclePoa && (
+        <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+          <span className="font-bold text-slate-800 flex items-center gap-1.5">
+            <Car className="w-4 h-4 text-blue-600" />
+            Тээврийн хэрэгслийн үзүүлэлт
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <input
+              type="text"
+              value={data.vehiclePlate || ''}
+              onChange={(e) => onChange({ vehiclePlate: e.target.value })}
+              placeholder="Улсын № (12-34 УБҮ)"
+              className="text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-mono font-bold"
+            />
+            <input
+              type="text"
+              value={data.vehicleModel || ''}
+              onChange={(e) => onChange({ vehicleModel: e.target.value })}
+              placeholder="Марк (Toyota Prado)"
+              className="text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-medium"
+            />
+            <input
+              type="text"
+              value={data.vehicleVin || ''}
+              onChange={(e) => onChange({ vehicleVin: e.target.value })}
+              placeholder="Арлын дугаар..."
+              className="text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-mono"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Payment Guarantee details */}
+      {isPaymentGuarantee && (
+        <div className="p-3.5 bg-teal-50/70 border border-teal-200 rounded-xl space-y-2 text-xs">
+          <span className="font-bold text-teal-950 flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-teal-600" />
+            Төлбөрийн баталгааны үзүүлэлт
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input
+              type="text"
+              value={data.paymentAmountNumber || ''}
+              onChange={(e) => onChange({ paymentAmountNumber: e.target.value })}
+              placeholder="Төлбөрийн дүн тоогоор (₮)"
+              className="text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-mono font-bold"
+            />
+            <input
+              type="text"
+              value={data.paymentDueDate || ''}
+              onChange={(e) => onChange({ paymentDueDate: e.target.value })}
+              placeholder="Төлөх эцсийн хугацаа"
+              className="text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-medium"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 6. ATTACHMENTS (Хавсралт жагсаалт) */}
+      <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <PenTool className="w-3.5 h-3.5 text-blue-600" />
-            Гарын үсэг баталгаажуулалт
+          <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+            <Paperclip className="w-3.5 h-3.5 text-blue-600" />
+            Хавсралт баримтууд ({(data.attachments || []).length})
           </label>
+          <button
+            type="button"
+            onClick={handleAddAttachment}
+            className="text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
+          >
+            + Хавсралт нэмэх
+          </button>
+        </div>
 
-          {/* Toggle between Primary and Secondary Signatory */}
-          {(isActDoc || isPoaDoc || data.secondSignatoryName || data.showSecondParty) && (
-            <div className="flex items-center bg-slate-100 p-0.5 rounded text-[11px]">
+        {(data.attachments || []).map((att, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={att}
+              onChange={(e) => handleUpdateAttachment(idx, e.target.value)}
+              className="flex-1 text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded-md font-medium"
+            />
+            <button
+              type="button"
+              onClick={() => handleRemoveAttachment(idx)}
+              className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* 7. SIGNATURE SECTION (Primary & Secondary) */}
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+            <PenTool className="w-4 h-4 text-blue-600" />
+            Гарын үсэг зурах / Баталгаажуулах
+          </span>
+
+          {data.showSecondParty && (
+            <div className="flex items-center bg-white p-0.5 rounded-lg border border-slate-200 text-xs">
               <button
                 type="button"
                 onClick={() => setActiveSigTab('primary')}
-                className={`px-2 py-0.5 rounded font-medium transition-colors cursor-pointer ${
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer ${
                   activeSigTab === 'primary'
-                    ? 'bg-white text-blue-700 shadow-2xs font-semibold'
+                    ? 'bg-blue-600 text-white'
                     : 'text-slate-600'
                 }`}
               >
-                1-р тал ({data.signatoryTitle || 'Гаргасан'})
+                1-р тал
               </button>
               <button
                 type="button"
                 onClick={() => setActiveSigTab('secondary')}
-                className={`px-2 py-0.5 rounded font-medium transition-colors cursor-pointer ${
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer ${
                   activeSigTab === 'secondary'
-                    ? 'bg-white text-blue-700 shadow-2xs font-semibold'
+                    ? 'bg-blue-600 text-white'
                     : 'text-slate-600'
                 }`}
               >
-                2-р тал ({data.secondSignatoryTitle || 'Хүлээн авсан'})
+                2-р тал
               </button>
             </div>
           )}
         </div>
 
-        {/* Submitter Name inputs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-[11px] font-semibold text-slate-600">
-                1-р талын нэр, албан тушаал
-              </label>
-              {(data.signatoryName || data.sender) && (
-                <button
-                  type="button"
-                  onClick={() => onChange({ signatoryName: '', sender: '' })}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                >
-                  ✕ Арилгах
-                </button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={data.signatoryTitle || ''}
-                onChange={(e) => onChange({ signatoryTitle: e.target.value })}
-                placeholder="Албан тушаал"
-                className="w-1/2 text-xs px-2 py-1 bg-white border border-slate-300 rounded"
-              />
-              <input
-                type="text"
-                value={data.signatoryName || data.sender || ''}
-                onChange={(e) =>
-                  onChange({ signatoryName: e.target.value, sender: e.target.value })
-                }
-                placeholder="Овог нэр"
-                className="w-1/2 text-xs px-2 py-1 bg-white border border-slate-300 rounded font-semibold"
-              />
-            </div>
-
-            {/* Sender phone & register inputs */}
-            {data.mode === 'personal' && (
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <div>
-                  <input
-                    type="text"
-                    value={data.senderPhone || ''}
-                    onChange={(e) => onChange({ senderPhone: e.target.value })}
-                    placeholder="Утас: 9911-..."
-                    className="w-full text-[11px] px-2 py-1 bg-white border border-slate-300 rounded"
-                  />
-                </div>
-                <div>
-                  <input
-                    type="text"
-                    value={data.senderRegister || ''}
-                    onChange={(e) => onChange({ senderRegister: e.target.value })}
-                    placeholder="РД: УШ..."
-                    className="w-full text-[11px] px-2 py-1 bg-white border border-slate-300 rounded font-mono"
-                  />
-                </div>
+        {activeSigTab === 'primary' ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">
+                  Албан тушаал
+                </label>
+                <input
+                  type="text"
+                  value={data.signatoryTitle || ''}
+                  onChange={(e) => onChange({ signatoryTitle: e.target.value })}
+                  placeholder="Гүйцэтгэх захирал"
+                  className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded"
+                />
               </div>
-            )}
-          </div>
 
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-[11px] font-semibold text-slate-600">
-                2-р талын нэр (Хүлээн авсан / Итгэмжлэгдэгч)
-              </label>
-              {data.secondSignatoryName && (
-                <button
-                  type="button"
-                  onClick={() =>
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">
+                  Овог нэр
+                </label>
+                <input
+                  type="text"
+                  value={data.signatoryName || data.sender || ''}
+                  onChange={(e) =>
                     onChange({
-                      secondSignatoryName: '',
-                      secondSignatoryTitle: '',
-                      showSecondParty: false,
+                      signatoryName: e.target.value,
+                      sender: e.target.value,
                     })
                   }
-                  className="text-[10px] text-slate-400 hover:text-rose-600 cursor-pointer"
-                >
-                  ✕ Хасах
-                </button>
-              )}
+                  placeholder="Б.Батбаяр"
+                  className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-semibold"
+                />
+              </div>
             </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={data.secondSignatoryTitle || ''}
-                onChange={(e) => onChange({ secondSignatoryTitle: e.target.value })}
-                placeholder="Хүлээн авсан:"
-                className="w-1/2 text-xs px-2 py-1 bg-white border border-slate-300 rounded"
-              />
-              <input
-                type="text"
-                value={data.secondSignatoryName || ''}
-                onChange={(e) => onChange({ secondSignatoryName: e.target.value })}
-                placeholder="Овог нэр"
-                className="w-1/2 text-xs px-2 py-1 bg-white border border-slate-300 rounded font-semibold"
-              />
-            </div>
-          </div>
-        </div>
 
-        {/* Active Signature Pad Canvas */}
-        {activeSigTab === 'primary' ? (
-          <div>
-            <div className="text-[11px] text-slate-500 mb-1">
-              1-р тал: <strong>{data.signatoryTitle || 'Гарын үсэг зурах'}:</strong>{' '}
-              {data.signatoryName || data.sender}
-            </div>
+            {/* Signature Drawing / Upload Pad */}
             <SignaturePad
               signatureDataUrl={data.signatureDataUrl}
               onSignatureChange={(url) => onChange({ signatureDataUrl: url })}
             />
           </div>
         ) : (
-          <div>
-            <div className="text-[11px] text-slate-500 mb-1">
-              2-р тал: <strong>{data.secondSignatoryTitle || 'Хүлээн авсан'}:</strong>{' '}
-              {data.secondSignatoryName}
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">
+                  2-р талын албан тушаал / Үүрэг
+                </label>
+                <input
+                  type="text"
+                  value={data.secondSignatoryTitle || ''}
+                  onChange={(e) => onChange({ secondSignatoryTitle: e.target.value })}
+                  placeholder="Хүлээн авсан ажилтан"
+                  className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">
+                  2-р талын нэр
+                </label>
+                <input
+                  type="text"
+                  value={data.secondSignatoryName || ''}
+                  onChange={(e) => onChange({ secondSignatoryName: e.target.value })}
+                  placeholder="О.Мөнхжаргал"
+                  className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded font-semibold"
+                />
+              </div>
             </div>
+
             <SignaturePad
               signatureDataUrl={data.secondSignatureDataUrl}
               onSignatureChange={(url) => onChange({ secondSignatureDataUrl: url })}
@@ -1932,6 +1390,62 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           </div>
         )}
       </div>
+
+      {/* 8. STAMP CONTROLS */}
+      {data.officialStamp && (
+        <div className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-xl space-y-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-rose-900 flex items-center gap-1.5">
+              <Stamp className="w-4 h-4 text-rose-600" />
+              Албаны тамганы тохиргоо
+            </span>
+            <label className="text-[11px] text-rose-700 hover:underline cursor-pointer">
+              <span>Тамганы зураг оруулах</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleStampUpload}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center gap-4 text-slate-600">
+            <label className="flex items-center gap-1.5">
+              <span className="text-[11px]">Эргүүлэлт:</span>
+              <input
+                type="range"
+                min="-45"
+                max="45"
+                value={data.stampRotation || -12}
+                onChange={(e) =>
+                  onChange({ stampRotation: parseInt(e.target.value, 10) })
+                }
+                className="w-24 text-rose-600"
+              />
+              <span className="text-[10px] font-mono">{data.stampRotation || -12}°</span>
+            </label>
+
+            <label className="flex items-center gap-1.5">
+              <span className="text-[11px]">Нэвт харагдалт:</span>
+              <input
+                type="range"
+                min="0.3"
+                max="1.0"
+                step="0.05"
+                value={data.stampOpacity || 0.85}
+                onChange={(e) =>
+                  onChange({ stampOpacity: parseFloat(e.target.value) })
+                }
+                className="w-24 text-rose-600"
+              />
+              <span className="text-[10px] font-mono">
+                {Math.round((data.stampOpacity || 0.85) * 100)}%
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

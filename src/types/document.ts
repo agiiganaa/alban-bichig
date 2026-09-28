@@ -80,6 +80,12 @@ export interface MeetingActionItem {
   deadline: string;
 }
 
+export interface DocumentSection {
+  id: string;
+  title: string;
+  content: string;
+}
+
 export interface DocumentData {
   id?: string;
   title?: string;
@@ -197,6 +203,7 @@ export interface DocumentData {
   paymentDueDate?: string;
 
   // Dynamic Add / Remove Sections & Clauses
+  documentSections?: DocumentSection[];
   paragraphsList?: string[];
   customFields?: { id: string; label: string; value: string }[];
   attachments?: string[];

@@ -12,12 +12,14 @@ import {
   PresetTemplate,
   OrgProfile,
   AppSettings,
+  DocumentSection,
 } from '../types/document';
 import { SignaturePad } from './SignaturePad';
 import {
   formatRecipientBlock,
   generateDocNumber,
   getFormattedMongolianDate,
+  normalizeDocumentSections,
 } from '../utils/documentUtils';
 import {
   Sparkles,
@@ -75,11 +77,15 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
   appSettings,
   onGenerateNextNumber,
 }) => {
-  const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
+  const [isAiProcessing, setIsAiProcessing] = useState<boolean>(false);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuccess, setAiSuccess] = useState<string | null>(null);
   const [selectedTone, setSelectedTone] = useState<AiTone>('standard');
-  const [previousRoughText, setPreviousRoughText] = useState<string | null>(null);
+  const [previousContent, setPreviousContent] = useState<{
+    id: string;
+    content: string;
+  } | null>(null);
   const [activeSigTab, setActiveSigTab] = useState<'primary' | 'secondary'>('primary');
   const [showAdvancedToggles, setShowAdvancedToggles] = useState<boolean>(false);
 
@@ -89,108 +95,128 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
   const [recipientName, setRecipientName] = useState<string>('');
   const [showRecipientBuilder, setShowRecipientBuilder] = useState<boolean>(false);
 
-  // Extract paragraphs array
-  const rawText = data.formalizedText || data.roughText || '';
-  const paragraphs =
-    data.paragraphsList && data.paragraphsList.length > 0
-      ? data.paragraphsList
-      : rawText
-          .split('\n')
-          .map((p) => p.trim())
-          .filter((p) => p.length > 0);
+  // Stable, normalized sections derived from document data
+  const sections: DocumentSection[] = React.useMemo(() => {
+    return normalizeDocumentSections(
+      data.paragraphsList,
+      data.formalizedText,
+      data.roughText,
+      data.documentSections
+    );
+  }, [data.documentSections, data.paragraphsList, data.formalizedText, data.roughText]);
 
-  // AI Operations (Formalize, Grammar, Shorten, Expand, Title)
-  const handleAiAction = async (action: 'formalize' | 'grammar' | 'shorten' | 'expand' | 'suggest_title') => {
-    const textToProcess =
-      paragraphs.length > 0 ? paragraphs.join('\n\n') : data.roughText;
+  const [selectedSectionId, setSelectedSectionId] = useState<string>('section-1');
 
-    if (!textToProcess.trim() && action !== 'suggest_title') {
-      setAiError('Шалтгаан, агуулгын хэсэгт эх бичвэрээ оруулна уу.');
+  // Guaranteed valid active section ID
+  const activeSectionId =
+    sections.find((s) => s.id === selectedSectionId)?.id ||
+    sections[0]?.id ||
+    'section-1';
+
+  // AI Operations: ONLY processes the currently selected section and replaces it
+  const handleAiAction = async (
+    action: 'formalize' | 'grammar' | 'shorten' | 'expand'
+  ) => {
+    // Requirement 3: 1 Click = 1 AI Request. Prevent duplicate/concurrent calls.
+    if (isAiProcessing) return;
+
+    // Requirement 4: Find exactly the selected section by stable ID
+    const currentSection =
+      sections.find((s) => s.id === activeSectionId) || sections[0];
+
+    if (!currentSection || !currentSection.content.trim()) {
+      setAiError('Эхлээд сонгосон догол мөрөндөө засах текстээ оруулна уу.');
+      setTimeout(() => setAiError(null), 3500);
       return;
     }
 
-    setIsAiLoading(true);
+    setIsAiProcessing(true);
+    setActiveAction(action);
     setAiError(null);
     setAiSuccess(null);
+
+    // Save previous state for undo
+    setPreviousContent({
+      id: currentSection.id,
+      content: currentSection.content,
+    });
 
     try {
       const response = await fetch('/api/formalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode: data.mode,
-          docType: data.docType,
-          recipient: data.recipient,
-          sender: data.sender || data.signatoryName,
-          companyName: data.companyName,
-          signatoryTitle: data.signatoryTitle,
-          roughText: textToProcess || data.docType,
-          duration: data.duration,
-          tone: selectedTone,
+          text: currentSection.content,
           action,
+          tone: selectedTone,
         }),
       });
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Хүсэлт амжилтгүй боллоо');
+        throw new Error(
+          errJson.error || 'AI боловсруулах үед алдаа гарлаа. Дахин оролдоно уу.'
+        );
       }
 
       const result = await response.json();
-      setPreviousRoughText(textToProcess);
+      const newText = (result.result || result.formalizedText || '').trim();
 
-      if (action === 'suggest_title' && result.suggestedTitle) {
-        onChange({ title: result.suggestedTitle });
-        setAiSuccess(`Гарчиг санал болгов: "${result.suggestedTitle}"`);
-      } else if (result.formalizedText) {
-        const newParagraphs = result.formalizedText
-          .split('\n')
-          .map((p: string) => p.trim())
-          .filter((p: string) => p.length > 0);
-
-        onChange({
-          formalizedText: result.formalizedText,
-          paragraphsList: newParagraphs,
-        });
-
-        const successMsg =
-          action === 'grammar'
-            ? 'Зөв бичгийн дүрэм, үг үсгийн алдааг хянаж заслаа!'
-            : action === 'shorten'
-            ? 'Баримтын агуулгыг товчлон богиносголоо!'
-            : action === 'expand'
-            ? 'Агуулга, үндэслэлийг дэлгэрүүлэн баяжууллаа!'
-            : 'Албан хэрэг хөтлөлтийн стандартын дагуу найруулав!';
-
-        setAiSuccess(successMsg);
+      if (!newText) {
+        throw new Error('AI-аас засварласан үр дүн ирсэнгүй.');
       }
 
+      // Requirement 2 & 5: UPDATE EXISTING CONTENT ONLY.
+      // Do NOT push, do NOT create new paragraphs or sections, do NOT duplicate text.
+      const updatedSections = sections.map((sec) =>
+        sec.id === currentSection.id ? { ...sec, content: newText } : sec
+      );
+
+      const newParagraphsList = updatedSections.map((s) => s.content);
+      onChange({
+        documentSections: updatedSections,
+        paragraphsList: newParagraphsList,
+        formalizedText: newParagraphsList.filter(Boolean).join('\n\n'),
+      });
+
+      const successLabels: Record<string, string> = {
+        formalize: 'Найруулгыг засаж шинэчиллээ.',
+        grammar: 'Үг, үсэг, дүрмийн алдааг шалгаж заслаа.',
+        shorten: 'Агуулгыг товчлон хураангуйлж шинэчиллээ.',
+        expand: 'Агуулгыг дэлгэрүүлэн баяжууллаа.',
+      };
+
+      setAiSuccess(successLabels[action] || 'Амжилттай заслаа.');
       setTimeout(() => setAiSuccess(null), 4000);
     } catch (err: any) {
       console.error('AI Action failed:', err);
       setAiError(
-        err.message || 'AI боловсруулалт хийх явцад алдаа гарлаа. Дахин оролдоно уу.'
+        err.message || 'AI боловсруулах үед алдаа гарлаа. Дахин оролдоно уу.'
       );
+      setTimeout(() => setAiError(null), 4000);
     } finally {
-      setIsAiLoading(false);
+      setIsAiProcessing(false);
+      setActiveAction(null);
     }
   };
 
-  const handleRevertText = () => {
-    if (previousRoughText) {
-      const prevParagraphs = previousRoughText
-        .split('\n')
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-
-      onChange({
-        formalizedText: previousRoughText,
-        paragraphsList: prevParagraphs,
-      });
-      setPreviousRoughText(null);
-      setAiSuccess('Өмнөх бичвэрийг сэргээлээ');
-      setTimeout(() => setAiSuccess(null), 2500);
-    }
+  // Undo AI changes
+  const handleUndo = () => {
+    if (!previousContent) return;
+    const restored = sections.map((sec) =>
+      sec.id === previousContent.id
+        ? { ...sec, content: previousContent.content }
+        : sec
+    );
+    const newParagraphsList = restored.map((s) => s.content);
+    onChange({
+      documentSections: restored,
+      paragraphsList: newParagraphsList,
+      formalizedText: newParagraphsList.filter(Boolean).join('\n\n'),
+    });
+    setPreviousContent(null);
+    setAiSuccess('Өмнөх бичвэрийг сэргээлээ.');
+    setTimeout(() => setAiSuccess(null), 2500);
   };
 
   // Recipient auto-formatter helper
@@ -202,33 +228,45 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
     }
   };
 
-  // Dynamic Clause/Paragraph management
+  // Dynamic Clause/Paragraph management with stable IDs
   const handleAddParagraph = () => {
-    const current = paragraphs.length > 0 ? paragraphs : [''];
+    const newId = `section-${Date.now()}`;
     const updated = [
-      ...current,
-      'Шинэ заалт / догол мөрийн агуулгыг энд бичнэ үү.',
+      ...sections,
+      { id: newId, title: `Заалт §${sections.length + 1}`, content: '' },
     ];
+    setSelectedSectionId(newId);
+    const newParagraphsList = updated.map((s) => s.content);
     onChange({
-      paragraphsList: updated,
-      formalizedText: updated.join('\n\n'),
+      documentSections: updated,
+      paragraphsList: newParagraphsList,
+      formalizedText: newParagraphsList.filter(Boolean).join('\n\n'),
     });
   };
 
-  const handleUpdateParagraph = (index: number, newText: string) => {
-    const updated = [...paragraphs];
-    updated[index] = newText;
+  const handleUpdateSection = (id: string, newText: string) => {
+    const updated = sections.map((sec) =>
+      sec.id === id ? { ...sec, content: newText } : sec
+    );
+    const newParagraphsList = updated.map((s) => s.content);
     onChange({
-      paragraphsList: updated,
-      formalizedText: updated.join('\n\n'),
+      documentSections: updated,
+      paragraphsList: newParagraphsList,
+      formalizedText: newParagraphsList.filter(Boolean).join('\n\n'),
     });
   };
 
-  const handleRemoveParagraph = (index: number) => {
-    const updated = paragraphs.filter((_, i) => i !== index);
+  const handleRemoveSection = (id: string) => {
+    if (sections.length <= 1) return;
+    const updated = sections.filter((sec) => sec.id !== id);
+    if (activeSectionId === id) {
+      setSelectedSectionId(updated[0]?.id || 'section-1');
+    }
+    const newParagraphsList = updated.map((s) => s.content);
     onChange({
-      paragraphsList: updated,
-      formalizedText: updated.join('\n\n'),
+      documentSections: updated,
+      paragraphsList: newParagraphsList,
+      formalizedText: newParagraphsList.filter(Boolean).join('\n\n'),
     });
   };
 
@@ -897,16 +935,22 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
             <div className="w-6 h-6 rounded-md bg-blue-600 text-white flex items-center justify-center">
               <Sparkles className="w-3.5 h-3.5" />
             </div>
-            <span className="text-xs font-bold text-slate-900">
-              AI Баримт бичгийн туслах
-            </span>
+            <div>
+              <span className="text-xs font-bold text-slate-900 block leading-tight">
+                AI Баримт бичгийн туслах
+              </span>
+              <span className="text-[10px] text-blue-700 font-medium">
+                Сонгогдсон: § {sections.findIndex((s) => s.id === activeSectionId) >= 0 ? sections.findIndex((s) => s.id === activeSectionId) + 1 : 1}-р хэсэг ({sections.find((s) => s.id === activeSectionId)?.title || 'Зүйл / Үндэслэл'})
+              </span>
+            </div>
           </div>
 
           {/* Tone Selector */}
           <select
             value={selectedTone}
             onChange={(e) => setSelectedTone(e.target.value as AiTone)}
-            className="text-[11px] bg-white border border-blue-200 rounded px-2 py-1 text-slate-700 font-medium"
+            disabled={isAiProcessing}
+            className="text-[11px] bg-white border border-blue-200 rounded px-2 py-1 text-slate-700 font-medium disabled:opacity-50"
           >
             <option value="standard">Стандарт албан бичиг</option>
             <option value="government">Төрийн байгууллагад (Хатуу)</option>
@@ -915,50 +959,66 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
           </select>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons: Exactly 4 distinct actions for selected section */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
           <button
             type="button"
-            disabled={isAiLoading}
+            disabled={isAiProcessing}
             onClick={() => handleAiAction('formalize')}
             className="p-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Wand2 className="w-3.5 h-3.5" />
-            <span>Найруулга засах</span>
+            <span>
+              {isAiProcessing && activeAction === 'formalize'
+                ? 'Найруулж байна...'
+                : 'Найруулга засах'}
+            </span>
           </button>
 
           <button
             type="button"
-            disabled={isAiLoading}
+            disabled={isAiProcessing}
             onClick={() => handleAiAction('grammar')}
             className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
           >
             <SpellCheck className="w-3.5 h-3.5 text-blue-600" />
-            <span>Алдаа засах</span>
+            <span>
+              {isAiProcessing && activeAction === 'grammar'
+                ? 'Шалгаж байна...'
+                : 'Алдаа шалгах'}
+            </span>
           </button>
 
           <button
             type="button"
-            disabled={isAiLoading}
+            disabled={isAiProcessing}
             onClick={() => handleAiAction('shorten')}
             className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
           >
             <Scissors className="w-3.5 h-3.5 text-blue-600" />
-            <span>Богиносгох</span>
+            <span>
+              {isAiProcessing && activeAction === 'shorten'
+                ? 'Богиносгож байна...'
+                : 'Богиносгох'}
+            </span>
           </button>
 
           <button
             type="button"
-            disabled={isAiLoading}
+            disabled={isAiProcessing}
             onClick={() => handleAiAction('expand')}
             className="p-2 bg-white hover:bg-blue-50 disabled:opacity-50 text-slate-700 border border-blue-200 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
           >
             <Maximize2 className="w-3.5 h-3.5 text-blue-600" />
-            <span>Дэлгэрүүлэх</span>
+            <span>
+              {isAiProcessing && activeAction === 'expand'
+                ? 'Дэлгэрүүлж байна...'
+                : 'Дэлгэрүүлэх'}
+            </span>
           </button>
         </div>
 
-        {/* Status / Errors / Revert */}
+        {/* Status / Errors / Undo */}
         {aiError && (
           <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
@@ -972,11 +1032,11 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>{aiSuccess}</span>
             </span>
-            {previousRoughText && (
+            {previousContent && (
               <button
                 type="button"
-                onClick={handleRevertText}
-                className="text-[11px] text-slate-600 hover:text-slate-900 underline cursor-pointer"
+                onClick={handleUndo}
+                className="text-[11px] text-slate-700 hover:text-slate-900 underline font-semibold cursor-pointer"
               >
                 Буцаах
               </button>
@@ -985,12 +1045,12 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
         )}
       </div>
 
-      {/* 4. DYNAMIC PARAGRAPHS & CLAUSES (Word-like clause builder) */}
+      {/* 4. DYNAMIC PARAGRAPHS & CLAUSES */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
             <FileText className="w-3.5 h-3.5 text-blue-600" />
-            Их бие бичвэр & Догол мөрүүд ({paragraphs.length})
+            Их бие бичвэр & Догол мөрүүд ({sections.length})
           </label>
           <button
             type="button"
@@ -1003,37 +1063,57 @@ export const DocumentForm: React.FC<DocumentFormProps> = ({
         </div>
 
         <div className="space-y-2.5">
-          {paragraphs.map((para, idx) => (
-            <div
-              key={idx}
-              className="p-3 bg-white border border-slate-300 rounded-xl shadow-2xs space-y-1.5 relative group"
-            >
-              <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
-                <span className="bg-slate-100 px-2 py-0.5 rounded font-bold text-slate-700">
-                  § {idx + 1}-р догол мөр
-                </span>
-                {paragraphs.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveParagraph(idx)}
-                    className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 cursor-pointer flex items-center gap-1 text-[11px]"
-                    title="Догол мөр устгах"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Устгах</span>
-                  </button>
-                )}
-              </div>
+          {sections.map((sec, idx) => {
+            const isSelected = activeSectionId === sec.id;
+            const sectionTitle = sec.title || (idx === 0 ? 'Зүйл / Үндэслэл' : `Заалт §${idx + 1}`);
+            return (
+              <div
+                key={sec.id}
+                onClick={() => setSelectedSectionId(sec.id)}
+                className={`p-3 bg-white border rounded-xl shadow-2xs space-y-1.5 transition-all cursor-pointer ${
+                  isSelected
+                    ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/15'
+                    : 'border-slate-300 hover:border-slate-400'
+                }`}
+              >
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-slate-100 px-2 py-0.5 rounded font-bold text-slate-700">
+                      § {idx + 1}. {sectionTitle}
+                    </span>
+                    {isSelected && (
+                      <span className="text-[10px] text-blue-700 font-sans font-semibold bg-blue-100/80 px-1.5 py-0.2 rounded">
+                        Сонгогдсон хэсэг ✓
+                      </span>
+                    )}
+                  </div>
+                  {sections.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveSection(sec.id);
+                      }}
+                      className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 cursor-pointer flex items-center gap-1 text-[11px]"
+                      title="Догол мөр устгах"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Устгах</span>
+                    </button>
+                  )}
+                </div>
 
-              <textarea
-                rows={3}
-                value={para}
-                onChange={(e) => handleUpdateParagraph(idx, e.target.value)}
-                placeholder="Догол мөрийн агуулгыг энд бичнэ үү..."
-                className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 leading-relaxed text-justify"
-              />
-            </div>
-          ))}
+                <textarea
+                  rows={3}
+                  value={sec.content}
+                  onFocus={() => setSelectedSectionId(sec.id)}
+                  onChange={(e) => handleUpdateSection(sec.id, e.target.value)}
+                  placeholder="Догол мөрийн агуулгыг энд бичнэ үү..."
+                  className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 leading-relaxed text-justify"
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { AppSettings, OrgProfile } from '../types/document';
+import { AppSettings, OrgProfile, DocumentSection } from '../types/document';
 
 export const getFormattedMongolianDate = (
   dateInput?: Date | string,
@@ -111,4 +111,36 @@ export const saveToStorage = <T>(key: string, data: T): void => {
   } catch (e) {
     console.error(`Failed to save ${key} to storage:`, e);
   }
+};
+
+/**
+ * Normalizes document content into stable, uniquely identifiable sections.
+ * Guarantees persistent IDs without regenerating them on every render.
+ */
+export const normalizeDocumentSections = (
+  paragraphsList?: string[],
+  formalizedText?: string,
+  roughText?: string,
+  existingSections?: DocumentSection[]
+): DocumentSection[] => {
+  if (existingSections && existingSections.length > 0) {
+    return existingSections;
+  }
+  if (paragraphsList && paragraphsList.length > 0) {
+    return paragraphsList.map((content, idx) => ({
+      id: `section-${idx + 1}`,
+      title: idx === 0 ? 'Зүйл / Үндэслэл' : `Заалт §${idx + 1}`,
+      content: content || '',
+    }));
+  }
+  const raw = (formalizedText || roughText || '').trim();
+  if (!raw) {
+    return [{ id: 'section-1', title: 'Зүйл / Үндэслэл', content: '' }];
+  }
+  const parts = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  return (parts.length > 0 ? parts : [raw]).map((content, idx) => ({
+    id: `section-${idx + 1}`,
+    title: idx === 0 ? 'Зүйл / Үндэслэл' : `Заалт §${idx + 1}`,
+    content,
+  }));
 };

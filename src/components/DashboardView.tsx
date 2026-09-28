@@ -51,7 +51,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            АЛБАН БИЧИГ БЭЛТГЭГЧ
+            Баримт бичиг боловсруулах систем
           </h2>
 
           <p className="text-sm text-slate-300 leading-relaxed">

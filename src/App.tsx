@@ -14,6 +14,7 @@ import {
 import { Header, AppNavTab } from './components/Header';
 import { DocumentForm } from './components/DocumentForm';
 import { DocumentPreview } from './components/DocumentPreview';
+import { OfficialA4Document } from './components/OfficialA4Document';
 import { DashboardView } from './components/DashboardView';
 import { DocumentsListView } from './components/DocumentsListView';
 import { TemplatesView } from './components/TemplatesView';
@@ -66,26 +67,31 @@ const SEED_DOCUMENTS: SavedDocument[] = [
   },
   {
     id: 'seed-doc-2',
-    title: 'Төлөөлөх бүрэн эрхийн итгэмжлэл',
+    title: 'Тээврийн хэрэгслийн итгэмжлэл',
     category: 'poa',
-    docType: 'ТӨЛӨӨЛӨХ ЭРХИЙН ИТГЭМЖЛЭЛ',
+    docType: 'ТЭЭВРИЙН ХЭРЭГСЛИЙН ИТГЭМЖЛЭЛ',
     documentNumber: 'ИТ-26/05',
     date: '2026.09.29',
     updatedAt: '2026.09.29',
     status: 'draft',
     data: {
       mode: 'corporate',
-      docType: 'ТӨЛӨӨЛӨХ ЭРХИЙН ИТГЭМЖЛЭЛ',
+      docType: 'ТЭЭВРИЙН ХЭРЭГСЛИЙН ИТГЭМЖЛЭЛ',
       recipient: '',
       sender: 'Б.Батбаяр',
       date: '2026 оны 09 дүгээр сарын 29',
       city: 'Улаанбаатар хот',
-      roughText: 'Төрийн болон хувийн хэвшлийн байгууллагад компанийг төлөөлөн бичиг баримт хүлээн авах, шилжүүлэх эрх олгох итгэмжлэл.',
-      formalizedText: 'Монгол Улсын Иргэний хуулийн 62, 64 дүгээр зүйлийг үндэслэн «Арвин Технологи» ХХК-ийн Гүйцэтгэх захирал Б.Батбаяр нь менежер Э.Тэмүүлэнд компанийг төлөөлөн төрийн байгууллагатай харилцах, албан бичиг баримт гардуулах бүрэн эрхийг үүгээр олгож байна.',
+      roughText: 'Компанийн эзэмшлийн Toyota Land Cruiser 200 маркийн тээврийн хэрэгслийг жолоодох эрх олгох итгэмжлэл.',
+      formalizedText: 'Монгол Улсын Иргэний хуулийн 62, 64 дүгээр зүйлийг үндэслэн «Арвин Технологи» ХХК-ийн Гүйцэтгэх захирал Б.Батбаяр нь менежер Э.Тэмүүлэнд компанийн өмчлөлийн Toyota Land Cruiser маркийн 12-34 УБ улсын дугаартай тээврийн хэрэгслийг албан ажлын зориулалтаар жолоодох бүрэн эрхийг үүгээр олгож байна.',
       fontFamily: 'serif',
       fontSize: 'base',
       companyName: '«АРВИН ТЕХНОЛОГИ» ХХК',
+      companyNameEn: 'ARVIN TECHNOLOGY LLC',
       companyRegister: '5412980',
+      companyAddress: 'Улаанбаатар хот, Сүхбаатар дүүрэг, 1-р хороо',
+      companyPhone: '7711-0099',
+      companyEmail: 'contact@arvintech.mn',
+      documentNumber: 'ИТ-26/05',
       grantorName: 'Б.Батбаяр',
       grantorRegister: 'УХ85011234',
       attorneyName: 'Э.Тэмүүлэн',
@@ -329,7 +335,13 @@ export default function App() {
   const handleApplyPreset = (preset: PresetTemplate) => {
     const newDocId = `doc-${Date.now()}`;
     const today = getFormattedMongolianDate(new Date(), appSettings.dateFormat);
-    const docNum = preset.documentNumber || generateDocNumber(appSettings.numberingPrefix, appSettings.numberingYear, appSettings.numberingCounter);
+    const docNum =
+      preset.documentNumber ||
+      generateDocNumber(
+        appSettings.numberingPrefix,
+        appSettings.numberingYear,
+        appSettings.numberingCounter
+      );
 
     const newDocData: DocumentData = {
       id: newDocId,
@@ -337,9 +349,15 @@ export default function App() {
       mode: preset.mode,
       docType: preset.docType,
       recipient: preset.recipient || '',
-      sender: preset.sender || (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
-      senderPhone: preset.senderPhone || (preset.mode === 'corporate' ? orgProfile.companyPhone : ''),
-      senderRegister: preset.senderRegister || (preset.mode === 'corporate' ? orgProfile.companyRegister : ''),
+      sender:
+        preset.sender ||
+        (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
+      senderPhone:
+        preset.senderPhone ||
+        (preset.mode === 'corporate' ? orgProfile.companyPhone : ''),
+      senderRegister:
+        preset.senderRegister ||
+        (preset.mode === 'corporate' ? orgProfile.companyRegister : ''),
       date: today,
       city: 'Улаанбаатар хот',
       duration: preset.duration || '',
@@ -351,33 +369,52 @@ export default function App() {
       fontFamily: 'serif',
       fontSize: 'base',
       showDottedLine: true,
-      officialStamp: preset.officialStamp !== undefined ? preset.officialStamp : preset.mode === 'corporate',
-      showCompanyHeader: preset.showCompanyHeader ?? (preset.mode === 'corporate'),
-      showDocNumber: preset.showDocNumber ?? (preset.mode === 'corporate'),
+      officialStamp:
+        preset.officialStamp !== undefined
+          ? preset.officialStamp
+          : preset.mode === 'corporate',
+      showCompanyHeader:
+        preset.showCompanyHeader ?? preset.mode === 'corporate',
+      showDocNumber: preset.showDocNumber ?? preset.mode === 'corporate',
       showRecipient: preset.showRecipient ?? true,
       showDateLocation: preset.showDateLocation ?? true,
       showSecondParty: preset.showSecondParty ?? false,
       showAttachments: preset.showAttachments ?? false,
 
       // Company info
-      companyName: orgProfile.companyName || preset.companyName || '«АРВИН ТЕХНОЛОГИ» ХХК',
-      companyNameEn: orgProfile.companyNameEn || preset.companyNameEn || 'ARVIN TECHNOLOGY LLC',
+      companyName:
+        orgProfile.companyName || preset.companyName || '«АРВИН ТЕХНОЛОГИ» ХХК',
+      companyNameEn:
+        orgProfile.companyNameEn || preset.companyNameEn || 'ARVIN TECHNOLOGY LLC',
       companyLogo: orgProfile.companyLogo || '',
-      companyRegister: orgProfile.companyRegister || preset.companyRegister || '5412980',
-      companyAddress: orgProfile.companyAddress || preset.companyAddress || 'Улаанбаатар хот',
-      companyPhone: orgProfile.companyPhone || preset.companyPhone || '7711-0099',
-      companyEmail: orgProfile.companyEmail || preset.companyEmail || 'contact@arvintech.mn',
-      companyWebsite: orgProfile.companyWebsite || preset.companyWebsite || 'www.arvintech.mn',
+      companyRegister:
+        orgProfile.companyRegister || preset.companyRegister || '5412980',
+      companyAddress:
+        orgProfile.companyAddress || preset.companyAddress || 'Улаанбаатар хот',
+      companyPhone:
+        orgProfile.companyPhone || preset.companyPhone || '7711-0099',
+      companyEmail:
+        orgProfile.companyEmail || preset.companyEmail || 'contact@arvintech.mn',
+      companyWebsite:
+        orgProfile.companyWebsite || preset.companyWebsite || 'www.arvintech.mn',
       documentNumber: docNum,
-      signatoryTitle: preset.signatoryTitle || orgProfile.signatoryTitle || 'Гүйцэтгэх захирал',
-      signatoryName: preset.signatoryName || orgProfile.signatoryName || 'Б.Батбаяр',
+      signatoryTitle:
+        preset.signatoryTitle ||
+        orgProfile.signatoryTitle ||
+        'Гүйцэтгэх захирал',
+      signatoryName:
+        preset.signatoryName || orgProfile.signatoryName || 'Б.Батбаяр',
 
       // Specialized fields
       actItems: preset.actItems || [],
       quoteItems: preset.quoteItems || [],
       handoverLocation: preset.handoverLocation || '',
-      grantorName: preset.grantorName || (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
-      grantorRegister: preset.grantorRegister || (preset.mode === 'corporate' ? orgProfile.companyRegister : ''),
+      grantorName:
+        preset.grantorName ||
+        (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
+      grantorRegister:
+        preset.grantorRegister ||
+        (preset.mode === 'corporate' ? orgProfile.companyRegister : ''),
       attorneyName: preset.attorneyName || '',
       attorneyRegister: preset.attorneyRegister || '',
       attorneyPhone: preset.attorneyPhone || '',
@@ -387,7 +424,9 @@ export default function App() {
       vehicleModel: preset.vehicleModel || '',
       vehicleVin: preset.vehicleVin || '',
       meetingTitle: preset.meetingTitle || '',
-      meetingChairperson: preset.meetingChairperson || (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
+      meetingChairperson:
+        preset.meetingChairperson ||
+        (preset.mode === 'corporate' ? orgProfile.signatoryName : ''),
       meetingSecretary: preset.meetingSecretary || '',
       meetingAttendees: preset.meetingAttendees || '',
       meetingAgenda: preset.meetingAgenda || '',
@@ -439,10 +478,19 @@ export default function App() {
       return;
     }
 
-    const isCorporate = ['corporate_letter', 'contract', 'internal', 'handover'].includes(category);
+    const isCorporate = [
+      'corporate_letter',
+      'contract',
+      'internal',
+      'handover',
+    ].includes(category);
     const newDocId = `doc-${Date.now()}`;
     const today = getFormattedMongolianDate(new Date(), appSettings.dateFormat);
-    const docNum = generateDocNumber(appSettings.numberingPrefix, appSettings.numberingYear, appSettings.numberingCounter);
+    const docNum = generateDocNumber(
+      appSettings.numberingPrefix,
+      appSettings.numberingYear,
+      appSettings.numberingCounter
+    );
 
     const newDocData: DocumentData = {
       id: newDocId,
@@ -517,14 +565,47 @@ export default function App() {
     }));
   };
 
-  const handlePrint = () => {
+  // Robust print handler ensuring fonts and images are ready before triggering Chrome print
+  const handlePrint = async () => {
     // Mark current document as printed
     setSavedDocuments((prev) =>
       prev.map((doc) =>
         doc.id === activeDocId ? { ...doc, status: 'printed' } : doc
       )
     );
-    window.print();
+
+    // Wait for document fonts to be ready
+    if (document.fonts) {
+      try {
+        await document.fonts.ready;
+      } catch (e) {
+        console.warn('Font loading wait skipped:', e);
+      }
+    }
+
+    // Wait for images in print root to finish loading if any
+    const images = Array.from(
+      document.querySelectorAll('#print-root img')
+    ) as HTMLImageElement[];
+
+    if (images.length > 0) {
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) resolve(true);
+              else {
+                img.onload = () => resolve(true);
+                img.onerror = () => resolve(true);
+              }
+            })
+        )
+      );
+    }
+
+    requestAnimationFrame(() => {
+      window.print();
+    });
   };
 
   const openNewDocModal = (category?: TemplateCategory) => {
@@ -533,150 +614,162 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
-      {/* Top Application Header Navigation */}
-      <Header
-        currentTab={currentNavTab}
-        onSelectTab={setCurrentNavTab}
-        onNewDocument={() => openNewDocModal()}
-        onPrint={handlePrint}
-        savedCount={savedDocuments.length}
-        isSaving={isSaving}
-        activeDocTitle={documentData.title || documentData.docType}
-      />
+    <>
+      {/* ================= SCREEN USER INTERFACE (Hidden during print) ================= */}
+      <div className="no-print min-h-screen bg-slate-100 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
+        {/* Top Application Header Navigation */}
+        <Header
+          currentTab={currentNavTab}
+          onSelectTab={setCurrentNavTab}
+          onNewDocument={() => openNewDocModal()}
+          onPrint={handlePrint}
+          savedCount={savedDocuments.length}
+          isSaving={isSaving}
+          activeDocTitle={documentData.title || documentData.docType}
+        />
 
-      {/* Main App Content Body */}
-      <main className="flex-1 w-full mx-auto p-3 sm:p-6 lg:p-8 print:p-0 print:m-0 print:max-w-none">
-        {/* VIEW 1: Dashboard */}
-        {currentNavTab === 'dashboard' && (
-          <DashboardView
-            documents={savedDocuments}
-            onOpenDocument={handleOpenDocument}
-            onDuplicateDocument={handleDuplicateDocument}
-            onDeleteDocument={handleDeleteDocument}
-            onNewDocument={() => openNewDocModal()}
-            onSelectCategory={(cat) => openNewDocModal(cat)}
-            onApplyPreset={handleApplyPreset}
-          />
-        )}
+        {/* Main App Content Body */}
+        <main className="flex-1 w-full mx-auto p-3 sm:p-6 lg:p-8">
+          {/* VIEW 1: Dashboard */}
+          {currentNavTab === 'dashboard' && (
+            <DashboardView
+              documents={savedDocuments}
+              onOpenDocument={handleOpenDocument}
+              onDuplicateDocument={handleDuplicateDocument}
+              onDeleteDocument={handleDeleteDocument}
+              onNewDocument={() => openNewDocModal()}
+              onSelectCategory={(cat) => openNewDocModal(cat)}
+              onApplyPreset={handleApplyPreset}
+            />
+          )}
 
-        {/* VIEW 2: Document Editor (Two Column Layout + A4 Live Preview) */}
-        {currentNavTab === 'editor' && (
-          <div className="max-w-7xl mx-auto">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start print:block">
-              {/* Left Column: Form & Word Controls */}
-              <div
-                className={`lg:col-span-6 xl:col-span-5 bg-white border border-slate-200/90 rounded-2xl shadow-xs p-4 sm:p-6 no-print ${
-                  mobileEditorTab === 'preview' ? 'hidden lg:block' : 'block'
-                }`}
-              >
-                <DocumentForm
-                  data={documentData}
-                  onChange={handleUpdate}
-                  onApplyPreset={handleApplyPreset}
-                  onReset={handleResetDocument}
-                  orgProfile={orgProfile}
-                  appSettings={appSettings}
-                  onGenerateNextNumber={handleGenerateNextNumber}
-                />
+          {/* VIEW 2: Document Editor (Two Column Layout + A4 Live Preview) */}
+          {currentNavTab === 'editor' && (
+            <div className="max-w-7xl mx-auto">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left Column: Form Controls */}
+                <div
+                  className={`lg:col-span-6 xl:col-span-5 bg-white border border-slate-200/90 rounded-2xl shadow-xs p-4 sm:p-6 ${
+                    mobileEditorTab === 'preview' ? 'hidden lg:block' : 'block'
+                  }`}
+                >
+                  <DocumentForm
+                    data={documentData}
+                    onChange={handleUpdate}
+                    onApplyPreset={handleApplyPreset}
+                    onReset={handleResetDocument}
+                    orgProfile={orgProfile}
+                    appSettings={appSettings}
+                    onGenerateNextNumber={handleGenerateNextNumber}
+                  />
 
-                {/* Mobile switch to preview CTA */}
-                <div className="lg:hidden mt-6 pt-4 border-t border-slate-200 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setMobileEditorTab('preview')}
-                    className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Баримтыг А4 хэлбэрээр харах →</span>
-                  </button>
+                  {/* Mobile switch to preview CTA */}
+                  <div className="lg:hidden mt-6 pt-4 border-t border-slate-200 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setMobileEditorTab('preview')}
+                      className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span>Баримтыг А4 хэлбэрээр харах →</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Right Column: Live A4 Document Preview */}
+                <div
+                  className={`lg:col-span-6 xl:col-span-7 bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden ${
+                    mobileEditorTab === 'edit' ? 'hidden lg:block' : 'block'
+                  }`}
+                >
+                  <DocumentPreview
+                    data={documentData}
+                    onPrint={handlePrint}
+                    onUpdateFont={(fontFamily, fontSize) =>
+                      handleUpdate({ fontFamily, fontSize })
+                    }
+                    onToggleStamp={() =>
+                      handleUpdate({
+                        officialStamp: !documentData.officialStamp,
+                      })
+                    }
+                    onChange={handleUpdate}
+                  />
                 </div>
               </div>
 
-              {/* Right Column: Live A4 Document Preview & WYSIWYG Editing */}
-              <div
-                className={`lg:col-span-6 xl:col-span-7 bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden print:border-none print:shadow-none print:rounded-none ${
-                  mobileEditorTab === 'edit' ? 'hidden lg:block' : 'block'
-                }`}
-              >
-                <DocumentPreview
-                  data={documentData}
-                  onPrint={handlePrint}
-                  onUpdateFont={(fontFamily, fontSize) =>
-                    handleUpdate({ fontFamily, fontSize })
+              {/* Floating Action Button on Mobile when viewing form to quickly jump to preview */}
+              <div className="lg:hidden fixed bottom-4 right-4 z-40">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMobileEditorTab((prev) =>
+                      prev === 'edit' ? 'preview' : 'edit'
+                    )
                   }
-                  onToggleStamp={() =>
-                    handleUpdate({ officialStamp: !documentData.officialStamp })
-                  }
-                  onChange={handleUpdate}
-                />
+                  className="shadow-lg px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-full text-xs font-medium flex items-center gap-2 border border-slate-700 cursor-pointer"
+                >
+                  {mobileEditorTab === 'edit' ? (
+                    <>
+                      <span>👁️ А4 Харах</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✏️ Засварлах</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
+          )}
 
-            {/* Floating Action Button on Mobile when viewing form to quickly jump to preview */}
-            <div className="lg:hidden no-print fixed bottom-4 right-4 z-40">
-              <button
-                type="button"
-                onClick={() =>
-                  setMobileEditorTab((prev) => (prev === 'edit' ? 'preview' : 'edit'))
-                }
-                className="shadow-lg px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-full text-xs font-medium flex items-center gap-2 border border-slate-700 cursor-pointer"
-              >
-                {mobileEditorTab === 'edit' ? (
-                  <>
-                    <span>👁️ А4 Харах</span>
-                  </>
-                ) : (
-                  <>
-                    <span>✏️ Засварлах</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
+          {/* VIEW 3: My Documents (Миний баримтууд) */}
+          {currentNavTab === 'documents' && (
+            <DocumentsListView
+              documents={savedDocuments}
+              onOpenDocument={handleOpenDocument}
+              onDuplicateDocument={handleDuplicateDocument}
+              onDeleteDocument={handleDeleteDocument}
+              onNewDocument={() => openNewDocModal()}
+            />
+          )}
 
-        {/* VIEW 3: My Documents (Миний баримтууд) */}
-        {currentNavTab === 'documents' && (
-          <DocumentsListView
-            documents={savedDocuments}
-            onOpenDocument={handleOpenDocument}
-            onDuplicateDocument={handleDuplicateDocument}
-            onDeleteDocument={handleDeleteDocument}
-            onNewDocument={() => openNewDocModal()}
-          />
-        )}
+          {/* VIEW 4: Templates (Загварууд) */}
+          {currentNavTab === 'templates' && (
+            <TemplatesView onApplyPreset={handleApplyPreset} />
+          )}
 
-        {/* VIEW 4: Templates (Загварууд) */}
-        {currentNavTab === 'templates' && (
-          <TemplatesView onApplyPreset={handleApplyPreset} />
-        )}
+          {/* VIEW 5: Organization Profile (Байгууллагын мэдээлэл) */}
+          {currentNavTab === 'org' && (
+            <OrganizationProfileView
+              profile={orgProfile}
+              onSaveProfile={handleSaveOrgProfile}
+              onApplyToCurrentDoc={handleApplyOrgProfileToDoc}
+            />
+          )}
 
-        {/* VIEW 5: Organization Profile (Байгууллагын мэдээлэл) */}
-        {currentNavTab === 'org' && (
-          <OrganizationProfileView
-            profile={orgProfile}
-            onSaveProfile={handleSaveOrgProfile}
-            onApplyToCurrentDoc={handleApplyOrgProfileToDoc}
-          />
-        )}
+          {/* VIEW 6: Settings (Тохиргоо) */}
+          {currentNavTab === 'settings' && (
+            <SettingsView
+              settings={appSettings}
+              onSaveSettings={handleSaveSettings}
+            />
+          )}
+        </main>
 
-        {/* VIEW 6: Settings (Тохиргоо) */}
-        {currentNavTab === 'settings' && (
-          <SettingsView
-            settings={appSettings}
-            onSaveSettings={handleSaveSettings}
-          />
-        )}
-      </main>
+        {/* New Document Modal with Categories & Templates */}
+        <NewDocumentModal
+          isOpen={isNewDocModalOpen}
+          onClose={() => setIsNewDocModalOpen(false)}
+          onSelectDocType={handleSelectDocTypeFromModal}
+          onApplyPreset={handleApplyPreset}
+          initialCategory={modalInitialCategory}
+        />
+      </div>
 
-      {/* New Document Modal with Categories & Templates */}
-      <NewDocumentModal
-        isOpen={isNewDocModalOpen}
-        onClose={() => setIsNewDocModalOpen(false)}
-        onSelectDocType={handleSelectDocTypeFromModal}
-        onApplyPreset={handleApplyPreset}
-        initialCategory={modalInitialCategory}
-      />
-    </div>
+      {/* ================= DEDICATED PRINT ROOT (Always in DOM, visible ONLY in print) ================= */}
+      <div id="print-root" className="print-only">
+        <OfficialA4Document data={documentData} isPrintMode={true} />
+      </div>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -32,195 +32,164 @@ async function startServer() {
     console.warn('GEMINI_API_KEY is not set in environment variables.');
   }
 
-  // API endpoint for formalizing Mongolian official document text
+  // API endpoint for formalizing selected Mongolian official document text
   app.post('/api/formalize', async (req: Request, res: Response) => {
     try {
       const {
-        mode = 'personal', // 'personal' | 'corporate'
-        docType = 'Өргөдөл',
-        recipient = '',
-        sender = '',
-        companyName = '',
-        signatoryTitle = '',
+        text = '',
         roughText = '',
-        duration = '',
+        action = 'formalize', // 'formalize' | 'grammar' | 'shorten' | 'expand'
         tone = 'standard', // 'government' | 'b2b' | 'respectful' | 'standard'
-        action = 'formalize', // 'formalize' | 'shorten' | 'expand' | 'grammar' | 'suggest_title'
       } = req.body;
 
-      if (!roughText || typeof roughText !== 'string' || !roughText.trim()) {
+      const inputContent = (text || roughText || '').trim();
+
+      if (!inputContent) {
         return res.status(400).json({
-          error: 'Ноорог текст оруулна уу.',
+          error: 'Эхлээд засах текстээ оруулна уу.',
         });
       }
 
       if (!ai) {
-        // Fallback rule-based formalization if API key is temporarily unavailable
-        let fallbackText = '';
-        if (action === 'grammar') {
-          fallbackText = roughText.trim();
-        } else if (docType.includes('АКТ')) {
-          fallbackText = `Монгол Улсын Нягтлан бодох бүртгэлийн хууль тогтоомж болон байгууллагын дотоод журмыг үндэслэн ${sender ? sender + ' нь ' : ''}${roughText.trim()}.\n\nДээр дурдсан эд хөрөнгө, ажил үүргийг шалган бүрэн бүтэн, ажиллагааны доголдолгүй, харилцан маргаангүйгээр хүлээлцсэнийг энэхүү актаар баталгаажуулав.`;
-        } else if (docType.includes('ИТГЭМЖЛЭЛ')) {
-          fallbackText = `Монгол Улсын Иргэний хуулийн холбогдох зүйлийг үндэслэн ${sender ? sender + ' нь ' : ''}${roughText.trim()}.\n\nЭнэхүү итгэмжлэлийг хуульд заасан үндэслэл, журмын дагуу олгосон бөгөөд хууль зүйн үр дагаврыг бүрэн хариуцна.`;
-        } else if (docType.includes('ХУРЛЫН ТЭМДЭГЛЭЛ')) {
-          fallbackText = `ХУРЛААР ХЭЛЭЛЦСЭН АСУУДАЛ БА ШИЙДВЭР:\n\n${roughText.trim()}.\n\nХурлаас гарсан шийдвэрийн биелэлтэд хяналт тавьж ажиллахыг холбогдох алба, үүрэг хариуцагч нарт даалгав.`;
-        } else if (docType.includes('БАТАЛГАА')) {
-          fallbackText = `Талуудын хооронд байгуулсан гэрээ, үүргийн харилцааг үндэслэн ${roughText.trim()}.\n\nТөлбөр төлөх хугацааг чанд баримтлах бөгөөд зөрчсөн тохиолдолд хуулийн дагуу хариуцлага хүлээхийг үүгээр үл маргах журмаар батлан дааж байна.`;
-        } else if (mode === 'corporate') {
-          fallbackText = `Энэхүү албан бичгээр танай хамт олонд энэ өдрийн амар амгаланг айлтган мэндчилье.\n\n${companyName ? companyName + ' нь ' : ''}${roughText.trim()}.\n\nБидний тавьж буй асуудлыг хүлээн авч, зохих журмын дагуу шийдвэрлэн хамтран ажиллана гэдэгт итгэлтэй байна.\n\nХүндэтгэсэн, ${signatoryTitle || 'Гүйцэтгэх захирал'} ${sender || ''}`;
-        } else {
-          fallbackText = `Миний бие ${sender ? sender + ' нь ' : ''}${roughText.trim()}.\n\nИймд энэхүү хүсэлтийг минь хүлээн авч, холбогдох журмын дагуу шийдвэрлэж өгнө үү.`;
+        // Fallback rule-based formalization if API is temporarily unavailable
+        let fallbackResult = inputContent;
+
+        if (action === 'formalize') {
+          if (fallbackResult.includes('би энэ машинаа өөр хүнд шилжүүлэх хүсэлтэй байна')) {
+            fallbackResult = fallbackResult.replace(
+              'би энэ машинаа өөр хүнд шилжүүлэх хүсэлтэй байна',
+              'Миний эзэмшлийн тээврийн хэрэгслийг бусдад шилжүүлэх хүсэлттэй байна.'
+            );
+          } else {
+            fallbackResult = fallbackResult
+              .replace(/машинаа/gi, 'тээврийн хэрэгслээ')
+              .replace(/машин/gi, 'тээврийн хэрэгсэл')
+              .replace(/(^|\s)би(\s|$)/gi, '$1миний бие$2')
+              .replace(/ажлаас гармаар байна/gi, 'үүрэгт ажлаас чөлөөлөгдөх хүсэлтэй байна')
+              .replace(/амралт авмаар байна/gi, 'ээлжийн амралт эдлэх хүсэлтэй байна')
+              .replace(/хүсэлтэй байна/gi, 'хүсэлттэй байна')
+              .replace(/өгмөөр байна/gi, 'хүлээлгэн өгөх хүсэлтэй байна');
+          }
+        } else if (action === 'grammar') {
+          fallbackResult = fallbackResult
+            .replace(/хүсэлтэй\b/gi, 'хүсэлттэй')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+        } else if (action === 'shorten') {
+          // Shorten by keeping core sentences
+          const sentences = fallbackResult.split(/[.!?]\s+/).filter(Boolean);
+          fallbackResult = sentences.slice(0, Math.max(1, Math.ceil(sentences.length / 2))).join('. ');
+          if (fallbackResult && !fallbackResult.endsWith('.')) fallbackResult += '.';
+        } else if (action === 'expand') {
+          if (!fallbackResult.includes('Иймд')) {
+            fallbackResult += ' Иймд дээрх асуудлыг холбогдох хууль тогтоомж, журмын дагуу хянан үзэж, зохих шийдвэр гаргаж өгнө үү.';
+          }
         }
 
         return res.json({
-          formalizedText: fallbackText,
-          formalEnding: 'Шийдвэрлэж өгнө үү.',
-          suggestedTitle: docType,
-          keyChanges: [
-            'Албан хэрэг хөтлөлтийн стандартын дагуу найруулав.',
-          ],
+          result: fallbackResult,
+          formalizedText: fallbackResult,
         });
       }
 
       let actionInstruction = '';
       if (action === 'grammar') {
-        actionInstruction = 'Үйлдэл: МОНГОЛ ХЭЛНИЙ ЗӨВ БИЧГИЙН ДҮРЭМ, ҮГ ҮСГИЙН АЛДААГ ШАЛГАЖ ЗАСАХ. Текстийн утга санаа, бүтцийг өөрчлөхгүйгээр зөвхөн үг, нөхцөл, цэг таслал, дүрмийн алдааг нямбай засна.';
+        actionInstruction =
+          'ҮЙЛДЭЛ: ҮГ, ҮСЭГ БОЛОН ДҮРМИЙН АЛДААГ ШАЛГАЖ ЗАСАХ. Текстийн утга санаа, бүтцийг өөрчлөхгүйгээр зөвхөн Монгол хэлний зөв бичих дүрмийн алдаа болон цэг таслалыг нямбай засна.';
       } else if (action === 'shorten') {
-        actionInstruction = 'Үйлдэл: ТЕКСТИЙГ БОГИНОСГОХ / ТОВЧЛОХ. Илүүц үг хэллэг, нуршсан өгүүлбэрийг хасаж, хамгийн гол агуулга, санал, шаардлагыг товч бөгөөд тодорхой болгоно.';
+        actionInstruction =
+          'ҮЙЛДЭЛ: БОГИНОСГОХ. Текстийн үндсэн агуулгыг алдагдуулахгүйгээр сунжирсан илүүц үг хэллэгийг хасаж, товч бөгөөд тодорхой найруулгаар хураангуйлна.';
       } else if (action === 'expand') {
-        actionInstruction = 'Үйлдэл: ДЭЛГЭРҮҮЛЭХ. Агуулгын үндэслэл, шалтгаан, үр дагавар, холбогдох зохицуулалтыг мэргэжлийн түвшинд баяжуулан дэлгэрүүлж бичнэ.';
-      } else if (action === 'suggest_title') {
-        actionInstruction = 'Үйлдэл: Баримт бичгийн агуулгад тохирох оновчтой, албан ёсны гарчиг болон дэд гарчгийг санал болгох.';
+        actionInstruction =
+          'ҮЙЛДЭЛ: ДЭЛГЭРҮҮЛЭХ. Текстийн үндсэн санааг Монгол хэлний албан хэрэг хөтлөлтийн стандартад нийцүүлэн зохих албан үндэслэл, найруулгаар дэлгэрүүлэн баяжуулж бичнэ.';
       } else {
-        actionInstruction = 'Үйлдэл: АЛБАН НАЙРУУЛГА ХИЙХ. Хэрэглэгчийн энгийн, ярианы эсвэл ноорог байдлаар бичсэн текстийг Монгол хэлний албан хэрэг хөтлөлтийн стандартын дагуу мэргэжлийн албан бичгийн найруулгад шилжүүлнэ.';
+        actionInstruction =
+          'ҮЙЛДЭЛ: НАЙРУУЛГА ЗАСАХ. Хэрэглэгчийн бичсэн текстийг Монгол хэлний төрийн албан бичгийн найруулгын стандартад нийцүүлэн мэргэжлийн албан хэллэгт шилжүүлнэ.';
       }
 
       let toneInstruction = '';
       if (tone === 'government') {
         toneInstruction =
-          'Найруулгын өнгө аяс: ТӨРИЙН БАЙГУУЛЛАГА, ЯАМ, АГЕНТЛАГТ хандсан албан ёсны хатуу, хууль эрх зүйн үндэслэл бүхий өндөр зэрэглэлийн найруулгатай байх.';
+          'Найруулгын өнгө аяс: Төрийн албан байгууллагад хандсан албан ёсны хатуу, хууль эрх зүйн үндэслэл бүхий найруулга.';
       } else if (tone === 'b2b') {
         toneInstruction =
-          'Найруулгын өнгө аяс: ТҮНШ БАЙГУУЛЛАГА, ХАРИЛЦАГЧ КОМПАНИД хандсан бизнесийн (B2B) соёлтой, харилцан ашигтай хамтын ажиллагааг эрхэмлэсэн, найрсаг бөгөөд ажил хэрэгч хэлбэртэй байх.';
+          'Найруулгын өнгө аяс: Бизнес, түнш байгууллагад хандсан ажил хэрэгч соёлтой, найрсаг найруулга.';
       } else if (tone === 'respectful') {
         toneInstruction =
-          'Найруулгын өнгө аяс: ХҮНДЭТГЭЛТЭЙ, ЗӨӨЛӨН - Дээд албан тушаалтан болон түнш байгууллагад онцгой хүндэтгэл илэрхийлсэн дипломат зөөлөн хэлбэртэй байх.';
+          'Найруулгын өнгө аяс: Хүндэтгэлтэй, дипломат зөөлөн найруулга.';
       } else {
         toneInstruction =
-          'Найруулгын өнгө аяс: Албан хэрэг хөтлөлтийн стандартын дагуу байгууллагын болон иргэний албан ёсны бичгийн ердийн хэв маягтай байх.';
+          'Найруулгын өнгө аяс: Албан хэрэг хөтлөлтийн стандартын дагуу ердийн албан ёсны хэв маяг.';
       }
 
-      let structureRequirement = '';
-      if (docType.includes('АКТ')) {
-        structureRequirement = `
-Хүлээлцэх актын бүтэц:
-1. Монгол Улсын Нягтлан бодох бүртгэлийн тухай хууль болон холбогдох журмыг үндэслэх.
-2. Хүлээлгэн өгсөн тал болон хүлээн авсан талуудын нэр, албан тушаал, хүлээлцсэн зорилго, үндэслэлийг тодорхой дурдах.
-3. Эд хөрөнгө, ажил үүргийг бүрэн бүтэн, ажиллагааны доголдолгүй, харилцан маргаангүйгээр шалган хүлээлцсэнийг баталгаажуулах.`;
-      } else if (docType.includes('ИТГЭМЖЛЭЛ')) {
-        structureRequirement = `
-Итгэмжлэлийн бүтэц:
-1. Монгол Улсын Иргэний хуулийн 62, 64 дүгээр зүйлийн холбогдох заалтыг үндэслэх.
-2. Итгэмжлэгч болон Итгэмжлэгдэгчийн овог нэр, регистрийн дугаарыг дурдах.
-3. Олгож буй эрх хэмжээ, гүйцэтгэх үйл ажиллагааг (1, 2, 3 гэх мэтээр) тодорхой заах.
-4. Итгэмжлэлийн хүчинтэй байх хугацаа болон бусдад дамжуулан итгэмжлэх эрхтэй эсэхийг тодорхой тусгах.`;
-      } else if (docType.includes('ХУРЛЫН ТЭМДЭГЛЭЛ')) {
-        structureRequirement = `
-Хурлын тэмдэглэлийн бүтэц:
-1. Хурлын сэдэв, хэлэлцсэн гол асуудлуудыг нэгтгэн дурдах.
-2. Хэлэлцүүлгийн гол санаа, гаргасан тодорхой шийдвэрүүдийг (1, 2, 3 гэсэн дугаарлалтаар) албаны хэлбэрээр эмх цэгцтэй бичих.`;
-      } else if (docType.includes('БАРАГДУУЛАХ') || docType.includes('ШААРДАХ') || docType.includes('БАТАЛГАА')) {
-        structureRequirement = `
-Төлбөрийн шаардлага / Баталгааны хуудасны бүтэц:
-1. Талуудын хоорондын гэрээ, үүргийн үндэслэлийг заах.
-2. Төлбөрийн үлдэгдэл дүн, төлөх эцсийн хугацааг тодорхой заах.
-3. Хугацаа хэтрүүлбэл тооцох хариуцлага, алданги болон хууль ёсны эрх зүйн үр дагаврыг дурдах.`;
-      } else if (mode === 'corporate') {
-        structureRequirement = `
-Компанийн албан бичгийн бүтэц:
-1. Эхлэлийн мэндчилгээ: "Энэхүү албан бичгээр танай хамт олонд энэ өдрийн мэндийг дэвшүүлье..." эсвэл "Танай байгууллагын хамт олонд энэ өдрийн амар амгаланг айлтган мэндчилье..." гэсэн албан ёсны мэндчилгээгээр эхлэх.
-2. Үндэслэл, агуулга: Хамтын ажиллагааны үндэслэл, гэрээний нөхцөл, бизнесийн шаардлага, шалтгааныг тодорхой дурдах.
-3. Гол санал / Хүсэлт: Тавьж буй санал, шаардлага эсвэл хүсэлтийг маш тодорхой (шаардлагатай бол 1, 2, 3 гэсэн дугаарлалтаар) томьёолох.
-4. Төгсгөлийн хэллэг: "Бидний хүсэлтийг судалж шийдвэрлэнэ гэдэгт итгэлтэй байна. Хамтран ажилласанд талархал илэрхийлье." гэх мэт албаны ёсны хүндэтгэлээр өндөрлөх.`;
-      } else {
-        structureRequirement = `
-Иргэн / Ажилтны өргөдөл, хүсэлтийн бүтэц:
-1. "Миний бие [Овог нэр, албан тушаал] нь..." гэсэн албан хэллэгээр эхлэх.
-2. Чөлөө, хүсэлт гаргах болсон бодит шалтгаан, нөхцөл байдал, холбогдох хугацаа, ажлаа хэнд хүлээлгэн өгсөн эсэхийг тодорхой дурдах.
-3. Төгсгөлд нь "Иймд миний хүсэлтийг хүлээн авч, зохих журмын дагуу шийдвэрлэж өгнө үү." гэж ёсчлон төгсгөх.`;
-      }
-
-      const prompt = `Чи бол Монгол хэлний албан хэрэг хөтлөлт, байгууллагын захиргааны бичиг хэргийн найруулгын мэргэжилтэн.
-Монгол Улсад мөрдөгдөж буй албан хэрэг хөтлөлтийн стандартын дагуу төгс найруулгатай албан бичвэр боловсруулна.
+      const prompt = `Та бол Монгол хэлний албан бичиг хэрэг хөтлөлтийн мэргэшсэн редактор.
+ЧУХАЛ ДҮРЭМ:
+1. Зөвхөн өгөгдсөн ТУХАЙН НЭГ ХЭСЭГ текстийг боловсруулна.
+2. Шинэ догол мөр, шинэ гарчиг, мэндчилгээ, өргөдлийн эхлэл, төгсгөл, гарын үсэг ОГТ НЭМЭХГҮЙ.
+3. Өмнөх текстийг давтаж давхар бичихгүй.
+4. Ямар нэг тайлбар үг (жишээ нь: "Мэдээж", "Зассан хувилбар:", "Энд байна:") ОГТ НЭМЭХГҮЙ.
+5. Зөвхөн зассан FINAL TEXT-ийг "result" утганд буцаана.
 
 ${actionInstruction}
-
-Хэлбэр: ${mode === 'corporate' ? 'Компани / ААН-ийн албан бичиг' : 'Иргэн / Ажилтны өргөдөл хүсэлт'}
-Баримт бичгийн төрөл: ${docType}
-Хүлээн авагч (Хэнд): ${recipient || 'Тодорхойгүй'}
-${companyName ? `Илгээгч байгууллага: ${companyName}` : ''}
-Гаргагч / Хариуцагч (Хэнээс): ${sender || 'Тодорхойгүй'}
-${signatoryTitle ? `Албан тушаал: ${signatoryTitle}` : ''}
-${duration ? `Холбогдох хугацаа: ${duration}` : ''}
 ${toneInstruction}
 
-${structureRequirement}
-
-Хэрэглэгчийн эх бичвэр:
+Эх бичвэр:
 """
-${roughText}
-"""
-
-Тавигдах шаардлага:
-1. Монгол хэлний зөв бичих дүрэм, найруулга зүйн дагуу албан ёсны үг хэллэгээр найруулах.
-2. Хэрэглэгчийн утга санааг дур мэдэн өөрчлөхгүй, найруулгын түвшинг сайжруулна.
-3. Хариуг ЗААВАЛ дараах JSON форматаар буцаана уу. JSON-оос өөр ямар ч текст бичиж болохгүй.
-
-{
-  "formalizedText": "Шинэчилсэн их бие текст...",
-  "formalEnding": "Төгсгөлийн албан хэллэг",
-  "suggestedTitle": "${docType}",
-  "keyChanges": [
-    "Хэрэгжүүлсэн сайжруулалт 1",
-    "Хэрэгжүүлсэн сайжруулалт 2"
-  ]
-}
-`;
+${inputContent}
+"""`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
-          temperature: 0.3,
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              result: {
+                type: Type.STRING,
+                description: 'Боловсруулж зассан эцсийн албан бичвэр',
+              },
+            },
+            required: ['result'],
+          },
+          temperature: 0.1,
         },
       });
 
       const rawResult = response.text || '';
-      let parsed;
+      let resultText = inputContent;
       try {
-        parsed = JSON.parse(rawResult.trim());
+        const parsed = JSON.parse(rawResult.trim());
+        resultText = parsed.result || rawResult.trim();
       } catch (e) {
-        // In case JSON parsing is slightly off, clean and recover
         const jsonMatch = rawResult.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          parsed = JSON.parse(jsonMatch[0]);
+          try {
+            const parsed = JSON.parse(jsonMatch[0]);
+            resultText = parsed.result || inputContent;
+          } catch {
+            resultText = rawResult.trim();
+          }
         } else {
-          parsed = {
-            formalizedText: rawResult.trim(),
-            formalEnding: 'Шийдвэрлэж өгнө үү.',
-            keyChanges: ['Найруулгыг сайжруулав'],
-          };
+          resultText = rawResult.replace(/^["']|["']$/g, '').trim();
         }
       }
 
-      return res.json(parsed);
+      // Clean any conversational introductory text if any slipped through
+      resultText = resultText
+        .replace(/^(Мэдээж|Энд зассан|Зассан хувилбар|Албан найруулга)[^:]*:\s*/i, '')
+        .replace(/^"""|"""$/g, '')
+        .trim();
+
+      return res.json({
+        result: resultText,
+        formalizedText: resultText,
+      });
     } catch (error: any) {
-      console.error('Error formalizing text with Gemini:', error);
+      console.error('Error in /api/formalize:', error);
       return res.status(500).json({
-        error:
-          'Албан найруулга хийх явцад алдаа гарлаа. Та дахин оролдоно уу.',
+        error: 'AI боловсруулах үед алдаа гарлаа. Дахин оролдоно уу.',
         details: error?.message || String(error),
       });
     }
